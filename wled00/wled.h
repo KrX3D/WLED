@@ -431,7 +431,10 @@ WLED_GLOBAL bool useGlobalLedBuffer _INIT(false); // double buffering disabled o
 #else
 WLED_GLOBAL bool useGlobalLedBuffer _INIT(true);  // double buffering enabled on ESP32
   #ifndef CONFIG_IDF_TARGET_ESP32C3
-WLED_GLOBAL bool useParallelI2S     _INIT(false); // parallel I2S for ESP32
+    #ifndef WLED_DEFAULT_USE_PARALLEL_I2S
+      #define WLED_DEFAULT_USE_PARALLEL_I2S false
+    #endif
+WLED_GLOBAL bool useParallelI2S     _INIT(WLED_DEFAULT_USE_PARALLEL_I2S); // parallel I2S for ESP32
   #endif
 #endif
 #ifdef WLED_USE_IC_CCT
@@ -506,7 +509,10 @@ WLED_GLOBAL char serverDescription[33] _INIT("WLED");  // Name of module - use d
 #else
 WLED_GLOBAL char serverDescription[33] _INIT(SERVERNAME);  // use predefined name
 #endif
-WLED_GLOBAL bool simplifiedUI          _INIT(false);   // enable simplified UI
+#ifndef WLED_DEFAULT_SIMPLIFIED_UI
+  #define WLED_DEFAULT_SIMPLIFIED_UI false
+#endif
+WLED_GLOBAL bool simplifiedUI          _INIT(WLED_DEFAULT_SIMPLIFIED_UI);   // enable simplified UI
 WLED_GLOBAL byte cacheInvalidate       _INIT(0);       // used to invalidate browser cache
 
 // Sync CONFIG
@@ -524,7 +530,10 @@ WLED_GLOBAL bool nodeBroadcastEnabled _INIT(NODE_DEFAULT_BROADCAST_ENABLED);
 WLED_GLOBAL int8_t irPin        _INIT(IRPIN);
 WLED_GLOBAL byte irEnabled      _INIT(IRTYPE); // Infrared receiver
 #endif
-WLED_GLOBAL bool irApplyToAllSelected _INIT(true); //apply IR or ESP-NOW to all selected segments
+#ifndef IR_DEFAULT_APPLY_TO_MAIN_SEGMENT_ONLY
+  #define IR_DEFAULT_APPLY_TO_MAIN_SEGMENT_ONLY false
+#endif
+WLED_GLOBAL bool irApplyToAllSelected _INIT(!IR_DEFAULT_APPLY_TO_MAIN_SEGMENT_ONLY); //apply IR or ESP-NOW to all selected segments
 
 #ifndef WLED_DISABLE_ALEXA
 WLED_GLOBAL bool alexaEnabled _INIT(false);                       // enable device discovery by Amazon Echo
@@ -775,8 +784,14 @@ WLED_GLOBAL bool buttonPressedBefore[WLED_MAX_BUTTONS]        _INIT({false});
 WLED_GLOBAL bool buttonLongPressed[WLED_MAX_BUTTONS]          _INIT({false});
 WLED_GLOBAL unsigned long buttonPressedTime[WLED_MAX_BUTTONS] _INIT({0});
 WLED_GLOBAL unsigned long buttonWaitTime[WLED_MAX_BUTTONS]    _INIT({0});
-WLED_GLOBAL bool disablePullUp                                _INIT(false);
-WLED_GLOBAL byte touchThreshold                               _INIT(TOUCH_THRESHOLD);
+#ifndef WLED_DEFAULT_DISABLE_PULLUP
+  #define WLED_DEFAULT_DISABLE_PULLUP false
+#endif
+WLED_GLOBAL bool disablePullUp                                _INIT(WLED_DEFAULT_DISABLE_PULLUP);
+#ifndef WLED_DEFAULT_TOUCH_THRESHOLD
+  #define WLED_DEFAULT_TOUCH_THRESHOLD TOUCH_THRESHOLD
+#endif
+WLED_GLOBAL byte touchThreshold                               _INIT(WLED_DEFAULT_TOUCH_THRESHOLD);
 
 // notifications
 #ifndef NOTIFY_DEFAULT_SEND_NOTIFICATIONS
