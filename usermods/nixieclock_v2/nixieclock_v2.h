@@ -102,17 +102,36 @@ public:
 	// External API: Control Nixie Power
 	//=====================================================================
 	// Can be used outside of this usermod to control the power state of Nixie tubes.
-	void setNixiePower(bool state) {
-		if (mainState != state) {
-			mainState = state;
-			if (!mainState) {
-				displayBlanked = mainState;
-			}
+	// For compatibility with other usermods, "true" disables the nixie tubes.
+	void setNixiePower(bool disable) {
+		setNixiePowerEnabled(!disable);
+	}
 
-			#ifdef DEBUG_PRINTF
-				_logUsermodNixieClock("Nixie power set to: %s", state ? "ON" : "OFF");
-			#endif
+	// Explicit helper for callers that want "true = enabled".
+	void setNixiePowerEnabled(bool enabled) {
+		if (nixiePower == enabled) {
+			return;
 		}
+
+		nixiePower = enabled;
+		displayBlanked = !enabled;
+
+		if (strip.getSegmentsNum() >= 3) {
+			strip.getSegment(2).setOption(SEG_OPTION_ON, enabled);
+		}
+
+		if (enabled) {
+			if (mainState && UM_ClockEnabled) {
+				displayTime();
+				displayBlanked = false;
+			}
+		} else {
+			powerOffNixieTubes();
+		}
+
+		#ifdef DEBUG_PRINTF
+			_logUsermodNixieClock("Nixie power set to: %s", enabled ? "ON" : "OFF");
+		#endif
 	}
 
 	//=====================================================================
