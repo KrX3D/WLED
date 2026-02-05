@@ -662,7 +662,7 @@ class UsermodButtonRelayToggle : public Usermod {
 			} else {
 				bool relayState = _activeLow[i] ? !digitalRead(_relayPins[i]) : digitalRead(_relayPins[i]);
 				_logUsermodB_R_T("Relay group %d current state: %s", i + 1, relayState ? "ON" : "OFF");
-				publishMqtt("Relay", i + 1, relayState);
+				publishMqtt("Relay", i + 1, relayState, false);
 				if(mqtt->subscribe(subscriptionTopic.c_str(), 0)){
 				  _logUsermodB_R_T("Successfully subscribed to topic: %s", subscriptionTopic.c_str());
 				} else {
@@ -930,7 +930,7 @@ class UsermodButtonRelayToggle : public Usermod {
 		// For relays, read and publish the actual current state
 		if (_relayPins[i] != -1) {
 		  bool relayState = _activeLow[i] ? !digitalRead(_relayPins[i]) : digitalRead(_relayPins[i]);
-		  publishMqtt("Relay", i + 1, relayState);
+		  publishMqtt("Relay", i + 1, relayState, false);
 		}
 	  }
 	  #endif
@@ -975,7 +975,7 @@ class UsermodButtonRelayToggle : public Usermod {
 		digitalWrite(_relayPins[i], _activeLow[i] ? !desiredOn : desiredOn);
 		
 		// And re-publish so HA sees the updated state
-		publishMqtt("Relay", i + 1, desiredOn );
+		publishMqtt("Relay", i + 1, desiredOn, false);
 		return true;
 	  }
       _logUsermodB_R_T("No matching MQTT topic found.");
@@ -987,7 +987,7 @@ class UsermodButtonRelayToggle : public Usermod {
     // Publish an MQTT message for a given group and message type.
     // "Button" messages publish a descriptive string; "Relay" messages publish ON/OFF.
     ////////////////////////////////////////////////////////////////////////////////
-    void publishMqtt(const char* message, uint8_t group, bool state) {
+    void publishMqtt(const char* message, uint8_t group, bool state, bool mirrorSet = true) {
       #ifndef WLED_DISABLE_MQTT
         if (!WLED_MQTT_CONNECTED) {
 		  _logUsermodB_R_T("MQTT not connected. Cannot publish MQTT message.");
@@ -1011,7 +1011,14 @@ class UsermodButtonRelayToggle : public Usermod {
         _logUsermodB_R_T("Publishing to topic: %s, Payload: %s", topic, payload);
         publishMqttMessage(topic, payload);
 
-        // Do not publish to /set topics; these are command-only.
+        if (mirrorSet && strcmp(message, "Relay") == 0) {
+          char setT[128];
+          strcpy(setT, topic);
+          strncat(setT, "/set", sizeof(setT) - strlen(setT) - 1);
+
+          publishMqttMessage(setT, payload);
+          _logUsermodB_R_T("Mirrored command to topic: %s → %s", setT, payload);
+        }
       #endif
     }
 
