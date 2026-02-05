@@ -821,6 +821,12 @@ class Segment {
 };
 
 // main "strip" class (108 bytes)
+#ifndef LED_DEFAULT_CORRECT_WB
+  #define LED_DEFAULT_CORRECT_WB false
+#endif
+#ifndef LED_DEFAULT_CCT_FROM_RGB
+  #define LED_DEFAULT_CCT_FROM_RGB false
+#endif
 class WS2812FX {
   typedef uint16_t (*mode_ptr)(); // pointer to mode function
   typedef void (*show_callback)(); // pre show callback
@@ -843,8 +849,8 @@ class WS2812FX {
 #else
       autoSegments(false),
 #endif
-      correctWB(false),
-      cctFromRgb(false),
+      correctWB(LED_DEFAULT_CORRECT_WB),
+      cctFromRgb(LED_DEFAULT_CCT_FROM_RGB),
       // true private variables
       _pixels(nullptr),
       _pixelCCT(nullptr),

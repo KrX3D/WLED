@@ -1442,8 +1442,14 @@ bool PolyBus::_useParallelI2S = false;
 
 // Bus static member definition
 int16_t Bus::_cct = -1;
-uint8_t Bus::_cctBlend = 0; // 0 - 127
-uint8_t Bus::_gAWM = 255;
+#ifndef LED_DEFAULT_CCT_BLEND
+  #define LED_DEFAULT_CCT_BLEND 0
+#endif
+#ifndef LED_DEFAULT_AUTO_WHITE_MODE
+  #define LED_DEFAULT_AUTO_WHITE_MODE AW_GLOBAL_DISABLED
+#endif
+uint8_t Bus::_cctBlend = LED_DEFAULT_CCT_BLEND; // 0 - 127
+uint8_t Bus::_gAWM = LED_DEFAULT_AUTO_WHITE_MODE;
 
 uint16_t BusDigital::_milliAmpsTotal = 0;
 

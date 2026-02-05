@@ -342,7 +342,10 @@ WLED_GLOBAL char ntpServerName[33] _INIT(WLED_NTP_SERVER);   // NTP server to us
 
 // WiFi CONFIG (all these can be changed via web UI, no need to set them here)
 WLED_GLOBAL std::vector<WiFiConfig> multiWiFi;
-WLED_GLOBAL IPAddress dnsAddress _INIT_N(((  8,   8,  8,  8)));   // Google's DNS
+#ifndef WIFI_DEFAULT_DNS
+  #define WIFI_DEFAULT_DNS 8,8,8,8
+#endif
+WLED_GLOBAL IPAddress dnsAddress _INIT_N(((WIFI_DEFAULT_DNS)));   // DNS server address
 WLED_GLOBAL char cmDNS[33]       _INIT(MDNS_NAME);                // mDNS address (*.local, replaced by wledXXXXXX if default is used)
 WLED_GLOBAL char apSSID[33]      _INIT("");                       // AP off by default (unless setup)
 #ifndef WIFI_DEFAULT_NO_WIFI_SLEEP
@@ -351,6 +354,18 @@ WLED_GLOBAL char apSSID[33]      _INIT("");                       // AP off by d
   #else
     #define WIFI_DEFAULT_NO_WIFI_SLEEP false
   #endif
+#endif
+#ifndef WIFI_DEFAULT_AP_CHANNEL
+  #define WIFI_DEFAULT_AP_CHANNEL 1
+#endif
+#ifndef WIFI_DEFAULT_AP_HIDE
+  #define WIFI_DEFAULT_AP_HIDE false
+#endif
+#ifndef WIFI_DEFAULT_AP_BEHAVIOR
+  #define WIFI_DEFAULT_AP_BEHAVIOR AP_BEHAVIOR_BOOT_NO_CONN
+#endif
+#ifndef WIFI_DEFAULT_FORCE_802_3G
+  #define WIFI_DEFAULT_FORCE_802_3G false
 #endif
 #ifdef WLED_SAVE_RAM
 typedef class WiFiOptions {
@@ -373,9 +388,9 @@ typedef class WiFiOptions {
     }
 } __attribute__ ((aligned(1), packed)) wifi_options_t;
   #ifdef ARDUINO_ARCH_ESP32
-WLED_GLOBAL wifi_options_t wifiOpt _INIT_N(({0, 1, false, AP_BEHAVIOR_BOOT_NO_CONN, WIFI_DEFAULT_NO_WIFI_SLEEP, false}));
+WLED_GLOBAL wifi_options_t wifiOpt _INIT_N(({0, WIFI_DEFAULT_AP_CHANNEL, WIFI_DEFAULT_AP_HIDE, WIFI_DEFAULT_AP_BEHAVIOR, WIFI_DEFAULT_NO_WIFI_SLEEP, WIFI_DEFAULT_FORCE_802_3G}));
   #else
-WLED_GLOBAL wifi_options_t wifiOpt _INIT_N(({0, 1, false, AP_BEHAVIOR_BOOT_NO_CONN, WIFI_DEFAULT_NO_WIFI_SLEEP, false}));
+WLED_GLOBAL wifi_options_t wifiOpt _INIT_N(({0, WIFI_DEFAULT_AP_CHANNEL, WIFI_DEFAULT_AP_HIDE, WIFI_DEFAULT_AP_BEHAVIOR, WIFI_DEFAULT_NO_WIFI_SLEEP, WIFI_DEFAULT_FORCE_802_3G}));
   #endif
 #define selectedWiFi wifiOpt.selectedWiFi
 #define apChannel    wifiOpt.apChannel
@@ -385,22 +400,27 @@ WLED_GLOBAL wifi_options_t wifiOpt _INIT_N(({0, 1, false, AP_BEHAVIOR_BOOT_NO_CO
 #define force802_3g  wifiOpt.force802_3g
 #else
 WLED_GLOBAL int8_t selectedWiFi  _INIT(0);
-WLED_GLOBAL byte apChannel       _INIT(1);                        // 2.4GHz WiFi AP channel (1-13)
-WLED_GLOBAL byte apHide          _INIT(0);                        // hidden AP SSID
-WLED_GLOBAL byte apBehavior      _INIT(AP_BEHAVIOR_BOOT_NO_CONN); // access point opens when no connection after boot by default
+WLED_GLOBAL byte apChannel       _INIT(WIFI_DEFAULT_AP_CHANNEL);  // 2.4GHz WiFi AP channel (1-13)
+WLED_GLOBAL byte apHide          _INIT(WIFI_DEFAULT_AP_HIDE);     // hidden AP SSID
+WLED_GLOBAL byte apBehavior      _INIT(WIFI_DEFAULT_AP_BEHAVIOR); // access point opens when no connection after boot by default
   #ifdef ARDUINO_ARCH_ESP32
 WLED_GLOBAL bool noWifiSleep _INIT(WIFI_DEFAULT_NO_WIFI_SLEEP);                         // disabling modem sleep modes will increase heat output and power usage, but may help with connection issues
   #else
 WLED_GLOBAL bool noWifiSleep _INIT(WIFI_DEFAULT_NO_WIFI_SLEEP);
   #endif
-WLED_GLOBAL bool force802_3g _INIT(false);
+WLED_GLOBAL bool force802_3g _INIT(WIFI_DEFAULT_FORCE_802_3G);
 #endif // WLED_SAVE_RAM
 #ifdef ARDUINO_ARCH_ESP32
   #if defined(LOLIN_WIFI_FIX) && (defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32S3))
-WLED_GLOBAL uint8_t txPower _INIT(WIFI_POWER_8_5dBm);
+    #ifndef WLED_DEFAULT_TX_POWER
+      #define WLED_DEFAULT_TX_POWER WIFI_POWER_8_5dBm
+    #endif
   #else
-WLED_GLOBAL uint8_t txPower _INIT(WIFI_POWER_19_5dBm);
+    #ifndef WLED_DEFAULT_TX_POWER
+      #define WLED_DEFAULT_TX_POWER WIFI_POWER_19_5dBm
+    #endif
   #endif
+WLED_GLOBAL uint8_t txPower _INIT(WLED_DEFAULT_TX_POWER);
 #endif
 #define WLED_WIFI_CONFIGURED isWiFiConfigured()
 
@@ -431,17 +451,34 @@ WLED_GLOBAL bool useGlobalLedBuffer _INIT(false); // double buffering disabled o
 #else
 WLED_GLOBAL bool useGlobalLedBuffer _INIT(true);  // double buffering enabled on ESP32
   #ifndef CONFIG_IDF_TARGET_ESP32C3
-WLED_GLOBAL bool useParallelI2S     _INIT(false); // parallel I2S for ESP32
+    #ifndef WLED_DEFAULT_USE_PARALLEL_I2S
+      #define WLED_DEFAULT_USE_PARALLEL_I2S false
+    #endif
+WLED_GLOBAL bool useParallelI2S     _INIT(WLED_DEFAULT_USE_PARALLEL_I2S); // parallel I2S for ESP32
   #endif
 #endif
 #ifdef WLED_USE_IC_CCT
-WLED_GLOBAL bool cctICused          _INIT(true);  // CCT IC used (Athom 15W bulbs)
+  #ifndef LED_DEFAULT_CCT_IC_USED
+    #define LED_DEFAULT_CCT_IC_USED true
+  #endif
 #else
-WLED_GLOBAL bool cctICused          _INIT(false); // CCT IC used (Athom 15W bulbs)
+  #ifndef LED_DEFAULT_CCT_IC_USED
+    #define LED_DEFAULT_CCT_IC_USED false
+  #endif
 #endif
-WLED_GLOBAL bool gammaCorrectCol    _INIT(true);  // use gamma correction on colors
-WLED_GLOBAL bool gammaCorrectBri    _INIT(false); // use gamma correction on brightness
-WLED_GLOBAL float gammaCorrectVal   _INIT(2.2f);  // gamma correction value
+WLED_GLOBAL bool cctICused          _INIT(LED_DEFAULT_CCT_IC_USED); // CCT IC used (Athom 15W bulbs)
+#ifndef LED_GAMMA_CORRECT_COLOR
+  #define LED_GAMMA_CORRECT_COLOR true
+#endif
+#ifndef LED_GAMMA_CORRECT_BRIGHTNESS
+  #define LED_GAMMA_CORRECT_BRIGHTNESS false
+#endif
+#ifndef LED_GAMMA_VALUE
+  #define LED_GAMMA_VALUE 2.2f
+#endif
+WLED_GLOBAL bool gammaCorrectCol    _INIT(LED_GAMMA_CORRECT_COLOR);      // use gamma correction on colors
+WLED_GLOBAL bool gammaCorrectBri    _INIT(LED_GAMMA_CORRECT_BRIGHTNESS); // use gamma correction on brightness
+WLED_GLOBAL float gammaCorrectVal   _INIT(LED_GAMMA_VALUE);              // gamma correction value
 
 // Default primary color (RGBW)
 #ifndef LED_DEFAULT_PRIMARY_R
@@ -473,11 +510,23 @@ WLED_GLOBAL byte colPri[] _INIT_N(({ LED_DEFAULT_PRIMARY_R, LED_DEFAULT_PRIMARY_
 #endif
 WLED_GLOBAL byte colSec[] _INIT_N(({ LED_DEFAULT_SECONDARY_R, LED_DEFAULT_SECONDARY_G, LED_DEFAULT_SECONDARY_B, LED_DEFAULT_SECONDARY_W }));      // current RGB(W) secondary color
 
-WLED_GLOBAL byte nightlightTargetBri _INIT(0);      // brightness after nightlight is over
-WLED_GLOBAL byte nightlightDelayMins _INIT(60);
-WLED_GLOBAL byte nightlightMode      _INIT(NL_MODE_FADE); // See const.h for available modes. Was nightlightFade
+#ifndef NIGHTLIGHT_DEFAULT_TARGET_BRIGHTNESS
+  #define NIGHTLIGHT_DEFAULT_TARGET_BRIGHTNESS 0
+#endif
+#ifndef NIGHTLIGHT_DEFAULT_DURATION_MINS
+  #define NIGHTLIGHT_DEFAULT_DURATION_MINS 60
+#endif
+#ifndef NIGHTLIGHT_DEFAULT_MODE
+  #define NIGHTLIGHT_DEFAULT_MODE NL_MODE_FADE
+#endif
+WLED_GLOBAL byte nightlightTargetBri _INIT(NIGHTLIGHT_DEFAULT_TARGET_BRIGHTNESS); // brightness after nightlight is over
+WLED_GLOBAL byte nightlightDelayMins _INIT(NIGHTLIGHT_DEFAULT_DURATION_MINS);
+WLED_GLOBAL byte nightlightMode      _INIT(NIGHTLIGHT_DEFAULT_MODE); // See const.h for available modes. Was nightlightFade
 
-WLED_GLOBAL byte briMultiplier _INIT(100);          // % of brightness to set (to limit power, if you set it to 50 and set bri to 255, actual brightness will be 127)
+#ifndef LED_DEFAULT_BRI_MULTIPLIER
+  #define LED_DEFAULT_BRI_MULTIPLIER 100
+#endif
+WLED_GLOBAL byte briMultiplier _INIT(LED_DEFAULT_BRI_MULTIPLIER); // % of brightness to set (to limit power, if you set it to 50 and set bri to 255, actual brightness will be 127)
 
 // User Interface CONFIG
 #ifndef SERVERNAME
@@ -485,7 +534,10 @@ WLED_GLOBAL char serverDescription[33] _INIT("WLED");  // Name of module - use d
 #else
 WLED_GLOBAL char serverDescription[33] _INIT(SERVERNAME);  // use predefined name
 #endif
-WLED_GLOBAL bool simplifiedUI          _INIT(false);   // enable simplified UI
+#ifndef WLED_DEFAULT_SIMPLIFIED_UI
+  #define WLED_DEFAULT_SIMPLIFIED_UI false
+#endif
+WLED_GLOBAL bool simplifiedUI          _INIT(WLED_DEFAULT_SIMPLIFIED_UI);   // enable simplified UI
 WLED_GLOBAL byte cacheInvalidate       _INIT(0);       // used to invalidate browser cache
 
 // Sync CONFIG
@@ -503,18 +555,42 @@ WLED_GLOBAL bool nodeBroadcastEnabled _INIT(NODE_DEFAULT_BROADCAST_ENABLED);
 WLED_GLOBAL int8_t irPin        _INIT(IRPIN);
 WLED_GLOBAL byte irEnabled      _INIT(IRTYPE); // Infrared receiver
 #endif
-WLED_GLOBAL bool irApplyToAllSelected _INIT(true); //apply IR or ESP-NOW to all selected segments
+#ifndef IR_DEFAULT_APPLY_TO_MAIN_SEGMENT_ONLY
+  #define IR_DEFAULT_APPLY_TO_MAIN_SEGMENT_ONLY false
+#endif
+WLED_GLOBAL bool irApplyToAllSelected _INIT(!IR_DEFAULT_APPLY_TO_MAIN_SEGMENT_ONLY); //apply IR or ESP-NOW to all selected segments
 
 #ifndef WLED_DISABLE_ALEXA
-WLED_GLOBAL bool alexaEnabled _INIT(false);                       // enable device discovery by Amazon Echo
-WLED_GLOBAL char alexaInvocationName[33] _INIT("Light");          // speech control name of device. Choose something voice-to-text can understand
-WLED_GLOBAL byte alexaNumPresets _INIT(0);                        // number of presets to expose to Alexa, starting from preset 1, up to 9
+  #ifndef ALEXA_DEFAULT_ENABLED
+    #define ALEXA_DEFAULT_ENABLED false
+  #endif
+  #ifndef ALEXA_DEFAULT_INVOCATION_NAME
+    #define ALEXA_DEFAULT_INVOCATION_NAME "Light"
+  #endif
+  #ifndef ALEXA_DEFAULT_NUM_PRESETS
+    #define ALEXA_DEFAULT_NUM_PRESETS 0
+  #endif
+WLED_GLOBAL bool alexaEnabled _INIT(ALEXA_DEFAULT_ENABLED);                       // enable device discovery by Amazon Echo
+WLED_GLOBAL char alexaInvocationName[33] _INIT(ALEXA_DEFAULT_INVOCATION_NAME);    // speech control name of device. Choose something voice-to-text can understand
+WLED_GLOBAL byte alexaNumPresets _INIT(ALEXA_DEFAULT_NUM_PRESETS);                 // number of presets to expose to Alexa, starting from preset 1, up to 9
 #endif
 
-WLED_GLOBAL uint16_t realtimeTimeoutMs _INIT(2500);               // ms timeout of realtime mode before returning to normal mode
-WLED_GLOBAL int arlsOffset _INIT(0);                              // realtime LED offset
-WLED_GLOBAL bool arlsDisableGammaCorrection _INIT(true);          // activate if gamma correction is handled by the source
-WLED_GLOBAL bool arlsForceMaxBri _INIT(false);                    // enable to force max brightness if source has very dark colors that would be black
+#ifndef ARLS_DEFAULT_TIMEOUT_MS
+  #define ARLS_DEFAULT_TIMEOUT_MS 2500
+#endif
+#ifndef ARLS_DEFAULT_OFFSET
+  #define ARLS_DEFAULT_OFFSET 0
+#endif
+#ifndef ARLS_DEFAULT_DISABLE_GAMMA_CORRECTION
+  #define ARLS_DEFAULT_DISABLE_GAMMA_CORRECTION true
+#endif
+#ifndef ARLS_DEFAULT_FORCE_MAX_BRI
+  #define ARLS_DEFAULT_FORCE_MAX_BRI false
+#endif
+WLED_GLOBAL uint16_t realtimeTimeoutMs _INIT(ARLS_DEFAULT_TIMEOUT_MS);               // ms timeout of realtime mode before returning to normal mode
+WLED_GLOBAL int arlsOffset _INIT(ARLS_DEFAULT_OFFSET);                               // realtime LED offset
+WLED_GLOBAL bool arlsDisableGammaCorrection _INIT(ARLS_DEFAULT_DISABLE_GAMMA_CORRECTION); // activate if gamma correction is handled by the source
+WLED_GLOBAL bool arlsForceMaxBri _INIT(ARLS_DEFAULT_FORCE_MAX_BRI);                    // enable to force max brightness if source has very dark colors that would be black
 
 #ifdef WLED_ENABLE_DMX
  #if defined(ESP8266) || defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32S2)
@@ -524,12 +600,24 @@ WLED_GLOBAL bool arlsForceMaxBri _INIT(false);                    // enable to f
  #endif
   WLED_GLOBAL uint16_t e131ProxyUniverse _INIT(0);                  // output this E1.31 (sACN) / ArtNet universe via MAX485 (0 = disabled)
   // dmx CONFIG
-  WLED_GLOBAL byte DMXChannels _INIT(7);        // number of channels per fixture
+  #ifndef WLED_DEFAULT_DMX_CHANNELS
+    #define WLED_DEFAULT_DMX_CHANNELS 7
+  #endif
+  WLED_GLOBAL byte DMXChannels _INIT(WLED_DEFAULT_DMX_CHANNELS);        // number of channels per fixture
   WLED_GLOBAL byte DMXFixtureMap[15] _INIT_N(({ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }));
   // assigns the different channels to different functions. See wled21_dmx.ino for more information.
-  WLED_GLOBAL uint16_t DMXGap _INIT(10);          // gap between the fixtures. makes addressing easier because you don't have to memorize odd numbers when climbing up onto a rig.
-  WLED_GLOBAL uint16_t DMXStart _INIT(10);        // start address of the first fixture
-  WLED_GLOBAL uint16_t DMXStartLED _INIT(0);      // LED from which DMX fixtures start
+  #ifndef WLED_DEFAULT_DMX_GAP
+    #define WLED_DEFAULT_DMX_GAP 10
+  #endif
+  #ifndef WLED_DEFAULT_DMX_START
+    #define WLED_DEFAULT_DMX_START 10
+  #endif
+  #ifndef WLED_DEFAULT_DMX_START_LED
+    #define WLED_DEFAULT_DMX_START_LED 0
+  #endif
+  WLED_GLOBAL uint16_t DMXGap _INIT(WLED_DEFAULT_DMX_GAP);          // gap between the fixtures. makes addressing easier because you don't have to memorize odd numbers when climbing up onto a rig.
+  WLED_GLOBAL uint16_t DMXStart _INIT(WLED_DEFAULT_DMX_START);        // start address of the first fixture
+  WLED_GLOBAL uint16_t DMXStartLED _INIT(WLED_DEFAULT_DMX_START_LED);      // LED from which DMX fixtures start
 #endif
 #ifdef WLED_ENABLE_DMX_INPUT
   WLED_GLOBAL int dmxInputTransmitPin _INIT(0);
@@ -539,16 +627,40 @@ WLED_GLOBAL bool arlsForceMaxBri _INIT(false);                    // enable to f
   WLED_GLOBAL DMXInput dmxInput;
 #endif
 
-WLED_GLOBAL uint16_t e131Universe _INIT(1);                       // settings for E1.31 (sACN) protocol (only DMX_MODE_MULTIPLE_* can span over consequtive universes)
-WLED_GLOBAL uint16_t e131Port _INIT(5568);                        // DMX in port. E1.31 default is 5568, Art-Net is 6454
-WLED_GLOBAL byte e131Priority _INIT(0);                           // E1.31 port priority (if != 0 priority handling is active)
+#ifndef WLED_DEFAULT_E131_UNIVERSE
+  #define WLED_DEFAULT_E131_UNIVERSE 1
+#endif
+#ifndef WLED_DEFAULT_E131_PORT
+  #define WLED_DEFAULT_E131_PORT 5568
+#endif
+#ifndef WLED_DEFAULT_E131_PRIORITY
+  #define WLED_DEFAULT_E131_PRIORITY 0
+#endif
+WLED_GLOBAL uint16_t e131Universe _INIT(WLED_DEFAULT_E131_UNIVERSE);                       // settings for E1.31 (sACN) protocol (only DMX_MODE_MULTIPLE_* can span over consequtive universes)
+WLED_GLOBAL uint16_t e131Port _INIT(WLED_DEFAULT_E131_PORT);                        // DMX in port. E1.31 default is 5568, Art-Net is 6454
+WLED_GLOBAL byte e131Priority _INIT(WLED_DEFAULT_E131_PRIORITY);                           // E1.31 port priority (if != 0 priority handling is active)
 WLED_GLOBAL E131Priority highPriority _INIT(3);                   // E1.31 highest priority tracking, init = timeout in seconds
-WLED_GLOBAL byte DMXMode _INIT(DMX_MODE_MULTIPLE_RGB);            // DMX mode (s.a.)
-WLED_GLOBAL uint16_t DMXAddress _INIT(1);                         // DMX start address of fixture, a.k.a. first Channel [for E1.31 (sACN) protocol]
-WLED_GLOBAL uint16_t DMXSegmentSpacing _INIT(0);                  // Number of void/unused channels between each segments DMX channels
+#ifndef WLED_DEFAULT_DMX_MODE
+  #define WLED_DEFAULT_DMX_MODE DMX_MODE_MULTIPLE_RGB
+#endif
+#ifndef WLED_DEFAULT_DMX_ADDRESS
+  #define WLED_DEFAULT_DMX_ADDRESS 1
+#endif
+#ifndef WLED_DEFAULT_DMX_SEGMENT_SPACING
+  #define WLED_DEFAULT_DMX_SEGMENT_SPACING 0
+#endif
+WLED_GLOBAL byte DMXMode _INIT(WLED_DEFAULT_DMX_MODE);            // DMX mode (s.a.)
+WLED_GLOBAL uint16_t DMXAddress _INIT(WLED_DEFAULT_DMX_ADDRESS);                         // DMX start address of fixture, a.k.a. first Channel [for E1.31 (sACN) protocol]
+WLED_GLOBAL uint16_t DMXSegmentSpacing _INIT(WLED_DEFAULT_DMX_SEGMENT_SPACING);                  // Number of void/unused channels between each segments DMX channels
 WLED_GLOBAL byte e131LastSequenceNumber[E131_MAX_UNIVERSE_COUNT]; // to detect packet loss
-WLED_GLOBAL bool e131Multicast _INIT(false);                      // multicast or unicast
-WLED_GLOBAL bool e131SkipOutOfSequence _INIT(false);              // freeze instead of flickering
+#ifndef WLED_DEFAULT_E131_MULTICAST
+  #define WLED_DEFAULT_E131_MULTICAST false
+#endif
+#ifndef WLED_DEFAULT_E131_SKIP_OUT_OF_SEQUENCE
+  #define WLED_DEFAULT_E131_SKIP_OUT_OF_SEQUENCE false
+#endif
+WLED_GLOBAL bool e131Multicast _INIT(WLED_DEFAULT_E131_MULTICAST);                      // multicast or unicast
+WLED_GLOBAL bool e131SkipOutOfSequence _INIT(WLED_DEFAULT_E131_SKIP_OUT_OF_SEQUENCE);              // freeze instead of flickering
 WLED_GLOBAL uint16_t pollReplyCount _INIT(0);                     // count number of replies for ArtPoll node report
 
 // mqtt
@@ -607,24 +719,54 @@ WLED_GLOBAL bool retainMqttMsg _INIT(MQTT_DEFAULT_RETAIN);                      
 #endif
 
 #ifndef WLED_DISABLE_HUESYNC
-WLED_GLOBAL bool huePollingEnabled _INIT(false);           // poll hue bridge for light state
-WLED_GLOBAL uint16_t huePollIntervalMs _INIT(2500);        // low values (< 1sec) may cause lag but offer quicker response
+  #ifndef HUE_DEFAULT_POLLING_ENABLED
+    #define HUE_DEFAULT_POLLING_ENABLED false
+  #endif
+  #ifndef HUE_DEFAULT_POLL_INTERVAL_MS
+    #define HUE_DEFAULT_POLL_INTERVAL_MS 2500
+  #endif
+  #ifndef HUE_DEFAULT_LIGHT_ID
+    #define HUE_DEFAULT_LIGHT_ID 1
+  #endif
+  #ifndef HUE_DEFAULT_IP
+    #define HUE_DEFAULT_IP 0,0,0,0
+  #endif
+  #ifndef HUE_DEFAULT_APPLY_ONOFF
+    #define HUE_DEFAULT_APPLY_ONOFF true
+  #endif
+  #ifndef HUE_DEFAULT_APPLY_BRI
+    #define HUE_DEFAULT_APPLY_BRI true
+  #endif
+  #ifndef HUE_DEFAULT_APPLY_COLOR
+    #define HUE_DEFAULT_APPLY_COLOR true
+  #endif
+WLED_GLOBAL bool huePollingEnabled _INIT(HUE_DEFAULT_POLLING_ENABLED);           // poll hue bridge for light state
+WLED_GLOBAL uint16_t huePollIntervalMs _INIT(HUE_DEFAULT_POLL_INTERVAL_MS);        // low values (< 1sec) may cause lag but offer quicker response
 WLED_GLOBAL char hueApiKey[47] _INIT("api");               // key token will be obtained from bridge
-WLED_GLOBAL byte huePollLightId _INIT(1);                  // ID of hue lamp to sync to. Find the ID in the hue app ("about" section)
-WLED_GLOBAL IPAddress hueIP _INIT_N(((0, 0, 0, 0))); // IP address of the bridge
-WLED_GLOBAL bool hueApplyOnOff _INIT(true);
-WLED_GLOBAL bool hueApplyBri _INIT(true);
-WLED_GLOBAL bool hueApplyColor _INIT(true);
+WLED_GLOBAL byte huePollLightId _INIT(HUE_DEFAULT_LIGHT_ID);                  // ID of hue lamp to sync to. Find the ID in the hue app ("about" section)
+WLED_GLOBAL IPAddress hueIP _INIT_N(((HUE_DEFAULT_IP))); // IP address of the bridge
+WLED_GLOBAL bool hueApplyOnOff _INIT(HUE_DEFAULT_APPLY_ONOFF);
+WLED_GLOBAL bool hueApplyBri _INIT(HUE_DEFAULT_APPLY_BRI);
+WLED_GLOBAL bool hueApplyColor _INIT(HUE_DEFAULT_APPLY_COLOR);
 #endif
 
-WLED_GLOBAL uint16_t serialBaud _INIT(1152); // serial baud rate, multiply by 100
+#ifndef SERIAL_DEFAULT_BAUD
+  #define SERIAL_DEFAULT_BAUD 1152
+#endif
+WLED_GLOBAL uint16_t serialBaud _INIT(SERIAL_DEFAULT_BAUD); // serial baud rate, multiply by 100
 WLED_GLOBAL bool     serialCanRX _INIT(false);
 WLED_GLOBAL bool     serialCanTX _INIT(false);
 
 #ifndef WLED_DISABLE_ESPNOW
-WLED_GLOBAL bool enableESPNow        _INIT(false);  // global on/off for ESP-NOW
+  #ifndef WLED_DEFAULT_ENABLE_ESPNOW
+    #define WLED_DEFAULT_ENABLE_ESPNOW false
+  #endif
+  #ifndef WLED_DEFAULT_USE_ESPNOW_SYNC
+    #define WLED_DEFAULT_USE_ESPNOW_SYNC false
+  #endif
+WLED_GLOBAL bool enableESPNow        _INIT(WLED_DEFAULT_ENABLE_ESPNOW);  // global on/off for ESP-NOW
 WLED_GLOBAL byte statusESPNow        _INIT(ESP_NOW_STATE_UNINIT); // state of ESP-NOW stack (0 uninitialised, 1 initialised, 2 error)
-WLED_GLOBAL bool useESPNowSync       _INIT(false);  // use ESP-NOW wireless technology for sync
+WLED_GLOBAL bool useESPNowSync       _INIT(WLED_DEFAULT_USE_ESPNOW_SYNC);  // use ESP-NOW wireless technology for sync
 //WLED_GLOBAL char linked_remote[13]   _INIT("");     // MAC of ESP-NOW remote (Wiz Mote)
 WLED_GLOBAL std::vector<std::array<char, 13>> linked_remotes; // MAC of ESP-NOW remotes (Wiz Mote)
 WLED_GLOBAL char last_signal_src[13] _INIT("");     // last seen ESP-NOW sender
@@ -670,16 +812,29 @@ WLED_GLOBAL byte macroDoublePress[WLED_MAX_BUTTONS]   _INIT({0});
 
 // Security CONFIG
 #ifdef WLED_OTA_PASS
-WLED_GLOBAL bool otaLock        _INIT(true);     // prevents OTA firmware updates without password. ALWAYS enable if system exposed to any public networks
+  #ifndef WLED_DEFAULT_OTA_LOCK
+    #define WLED_DEFAULT_OTA_LOCK true
+  #endif
 #else
-WLED_GLOBAL bool otaLock        _INIT(false);     // prevents OTA firmware updates without password. ALWAYS enable if system exposed to any public networks
+  #ifndef WLED_DEFAULT_OTA_LOCK
+    #define WLED_DEFAULT_OTA_LOCK false
+  #endif
 #endif
-WLED_GLOBAL bool wifiLock       _INIT(false);     // prevents access to WiFi settings when OTA lock is enabled
+WLED_GLOBAL bool otaLock        _INIT(WLED_DEFAULT_OTA_LOCK);     // prevents OTA firmware updates without password. ALWAYS enable if system exposed to any public networks
+#ifndef WLED_DEFAULT_WIFI_LOCK
+  #define WLED_DEFAULT_WIFI_LOCK false
+#endif
+WLED_GLOBAL bool wifiLock       _INIT(WLED_DEFAULT_WIFI_LOCK);     // prevents access to WiFi settings when OTA lock is enabled
 #ifdef WLED_ENABLE_AOTA
-WLED_GLOBAL bool aOtaEnabled    _INIT(true);      // ArduinoOTA allows easy updates directly from the IDE. Careful, it does not auto-disable when OTA lock is on
+  #ifndef WLED_DEFAULT_AOTA_ENABLED
+    #define WLED_DEFAULT_AOTA_ENABLED true
+  #endif
 #else
-WLED_GLOBAL bool aOtaEnabled    _INIT(false);     // ArduinoOTA allows easy updates directly from the IDE. Careful, it does not auto-disable when OTA lock is on
+  #ifndef WLED_DEFAULT_AOTA_ENABLED
+    #define WLED_DEFAULT_AOTA_ENABLED false
+  #endif
 #endif
+WLED_GLOBAL bool aOtaEnabled    _INIT(WLED_DEFAULT_AOTA_ENABLED);  // ArduinoOTA allows easy updates directly from the IDE. Careful, it does not auto-disable when OTA lock is on
 #ifndef OTA_DEFAULT_SAME_SUBNET
   #define OTA_DEFAULT_SAME_SUBNET true
 #endif
@@ -707,11 +862,17 @@ WLED_GLOBAL uint8_t paletteBlend _INIT(0);        // determines blending and wra
 // transitions
 WLED_GLOBAL uint8_t       blendingStyle            _INIT(0);      // effect blending/transitionig style
 WLED_GLOBAL bool          transitionActive         _INIT(false);
-WLED_GLOBAL uint16_t      transitionDelay          _INIT(750);    // global transition duration
-WLED_GLOBAL uint16_t      transitionDelayDefault   _INIT(750);    // default transition time (stored in cfg.json)
+#ifndef LED_DEFAULT_TRANSITION_MS
+  #define LED_DEFAULT_TRANSITION_MS 750
+#endif
+WLED_GLOBAL uint16_t      transitionDelay          _INIT(LED_DEFAULT_TRANSITION_MS);    // global transition duration
+WLED_GLOBAL uint16_t      transitionDelayDefault   _INIT(LED_DEFAULT_TRANSITION_MS);    // default transition time (stored in cfg.json)
 WLED_GLOBAL unsigned long transitionStartTime;
 WLED_GLOBAL bool          jsonTransitionOnce       _INIT(false);  // flag to override transitionDelay (playlist, JSON API: "live" & "seg":{"i"} & "tt")
-WLED_GLOBAL uint8_t       randomPaletteChangeTime  _INIT(5);      // amount of time [s] between random palette changes (min: 1s, max: 255s)
+#ifndef LED_DEFAULT_RANDOM_PALETTE_TIME_S
+  #define LED_DEFAULT_RANDOM_PALETTE_TIME_S 5
+#endif
+WLED_GLOBAL uint8_t       randomPaletteChangeTime  _INIT(LED_DEFAULT_RANDOM_PALETTE_TIME_S); // amount of time [s] between random palette changes (min: 1s, max: 255s)
 WLED_GLOBAL bool          useHarmonicRandomPalette _INIT(true);   // use *harmonic* random palette generation (nicer looking) or truly random
 
 // nightlight
@@ -748,8 +909,14 @@ WLED_GLOBAL bool buttonPressedBefore[WLED_MAX_BUTTONS]        _INIT({false});
 WLED_GLOBAL bool buttonLongPressed[WLED_MAX_BUTTONS]          _INIT({false});
 WLED_GLOBAL unsigned long buttonPressedTime[WLED_MAX_BUTTONS] _INIT({0});
 WLED_GLOBAL unsigned long buttonWaitTime[WLED_MAX_BUTTONS]    _INIT({0});
-WLED_GLOBAL bool disablePullUp                                _INIT(false);
-WLED_GLOBAL byte touchThreshold                               _INIT(TOUCH_THRESHOLD);
+#ifndef WLED_DEFAULT_DISABLE_PULLUP
+  #define WLED_DEFAULT_DISABLE_PULLUP false
+#endif
+WLED_GLOBAL bool disablePullUp                                _INIT(WLED_DEFAULT_DISABLE_PULLUP);
+#ifndef WLED_DEFAULT_TOUCH_THRESHOLD
+  #define WLED_DEFAULT_TOUCH_THRESHOLD TOUCH_THRESHOLD
+#endif
+WLED_GLOBAL byte touchThreshold                               _INIT(WLED_DEFAULT_TOUCH_THRESHOLD);
 
 // notifications
 #ifndef NOTIFY_DEFAULT_SEND_NOTIFICATIONS
