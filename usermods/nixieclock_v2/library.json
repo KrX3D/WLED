@@ -1,0 +1,6 @@
+{
+  "name": "nixieclock_v2",
+  "build": {
+    "libArchive": false
+  }
+}
