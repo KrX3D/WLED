@@ -90,6 +90,7 @@ class UsermodButtonRelayToggle : public Usermod {
 
     // --- Constants ---
     #define DEBOUNCE_MS 50             // milliseconds for stable reading
+    #define MIN_PRESS_MS 50            // minimum stable press duration before allowing toggle
     #define TOGGLE_LOCKOUT_MS 300      // ignore further toggles for this long after a relay toggle
 
     // --- Button state arrays (one per group) ---
@@ -97,6 +98,8 @@ class UsermodButtonRelayToggle : public Usermod {
     bool _lastRaw[4] = { false, false, false, false };           // raw last read value (true==pressed)
     unsigned long _lastDebounceTime[4] = { 0, 0, 0, 0 };         // last time raw changed
     bool _stableState[4] = { false, false, false, false };       // debounced stable state (true==pressed)
+    bool _pressSeen[4] = { false, false, false, false };         // true after a stable press is observed
+    unsigned long _pressStartTime[4] = { 0, 0, 0, 0 };           // time when stable press began
     unsigned long _lastToggleTime[4] = { 0, 0, 0, 0 };           // last time we toggled this relay
 
 	#define STARTUP_IGNORE_MS 1000   // ignore button events for this many ms after setup; tweak as needed
@@ -178,6 +181,8 @@ class UsermodButtonRelayToggle : public Usermod {
           bool phys = isButtonPhysicallyPressed(i);
 	      _lastRaw[i]          = phys;
 	      _stableState[i]      = phys;
+	      _pressSeen[i]        = phys;
+	      _pressStartTime[i]   = millis();
 	      _lastDebounceTime[i] = millis();
 	      _lastToggleTime[i]   = 0; // temporary, will be seeded globally below
 	      _logUsermodB_R_T("Button %u initial physical=%d, stable=%d", i + 1, phys, _stableState[i]);
@@ -263,29 +268,43 @@ class UsermodButtonRelayToggle : public Usermod {
 
       // If raw is stable for DEBOUNCE_MS and differs from stable value, accept change
       if ((now - _lastDebounceTime[index]) >= DEBOUNCE_MS && physPressed != _stableState[index]) {
-        bool previousStable = _stableState[index];
-        _stableState[index] = physPressed; // new stable state accepted
+          _stableState[index] = physPressed; // new stable state accepted
 
         if (_stableState[index]) {
           // Transition: RELEASED -> PRESSED
           _logUsermodB_R_T("Button %u pressed (stable).", index + 1);
+          _pressSeen[index] = true;
+          _pressStartTime[index] = now;
           // (original behavior did not publish on press; keeping it silent to match original)
         } else {
           // Transition: PRESSED -> RELEASED
           _logUsermodB_R_T("Button %u released (stable).", index + 1);
 
+          if (!_pressSeen[index]) {
+            _logUsermodB_R_T("Button %u release ignored (no stable press seen).", index + 1);
+            return;
+          }
+
+          if ((now - _pressStartTime[index]) < MIN_PRESS_MS) {
+            _logUsermodB_R_T("Button %u release ignored (press too short: %lums).", index + 1, now - _pressStartTime[index]);
+            _pressSeen[index] = false;
+            return;
+          }
+
           // Enforce toggle lockout to avoid double toggles from bounce or crosstalk
           if ((now - _lastToggleTime[index]) < TOGGLE_LOCKOUT_MS) {
             _logUsermodB_R_T("Button %u toggle ignored due to lockout (%lums since last toggle).", index+1, now - _lastToggleTime[index]);
+            _pressSeen[index] = false;
             return;
           }
 
           // On a released (short) press -> toggle relay (matches original behavior)
           #ifndef WLED_DISABLE_MQTT
-          publishMqtt("Button", index + 1, true); // publish RELEASED as original code did (state=false)
+          publishMqtt("Button", index + 1, false); // publish RELEASED as original code did
           #endif
           toggleRelay(index);
           _lastToggleTime[index] = now;
+          _pressSeen[index] = false;
         }
       }
     }
@@ -992,14 +1011,7 @@ class UsermodButtonRelayToggle : public Usermod {
         _logUsermodB_R_T("Publishing to topic: %s, Payload: %s", topic, payload);
         publishMqttMessage(topic, payload);
 
-        if(strcmp(message, "Relay") == 0){
-          char setT[128];
-          strcpy(setT, topic);
-          strncat(setT, "/set", sizeof(setT) - strlen(setT) - 1);
-		
-          publishMqttMessage(setT, payload);
-          _logUsermodB_R_T("Mirrored command to topic: %s → %s", setT, payload);
-        }
+        // Do not publish to /set topics; these are command-only.
       #endif
     }
 
