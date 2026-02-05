@@ -1,0 +1,669 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>WLED Sensor JSON Builder — v7 (table layout fixed)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root{--bg:#f7fafc;--card:#ffffff;--muted:#6b7280;--accent:#2563eb;--danger:#b91c1c}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;margin:18px;color:#111;background:var(--bg)}
+  h1{margin-top:0}
+  .card{background:var(--card);border:1px solid #e6e6e6;padding:14px;border-radius:10px;margin-bottom:14px}
+  label{display:block;margin-bottom:6px;font-weight:600}
+  input[type="text"], textarea {padding:8px;border:1px solid #ddd;border-radius:8px;font-size:13px;width:100%}
+  textarea{min-height:120px;font-family:monospace}
+  button{padding:8px 12px;border-radius:8px;border:1px solid #cfcfcf;background:#fff;cursor:pointer}
+  .danger{border-color:var(--danger);background:#fff5f5}
+  .muted{color:var(--muted);font-size:13px}
+  .small{font-size:12px;color:var(--muted)}
+  .row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}
+  .col{flex:1;min-width:160px}
+  .controls {display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .palette{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+    padding:10px;
+    border-radius:10px;
+    background:#f9fafb;
+    border:1px solid #eee;
+    margin-top:8px;
+    justify-content:space-around;
+    align-content:flex-start;
+  }
+  .token{display:inline-flex;align-items:center;gap:6px;padding:8px 10px;border-radius:8px;border:1px solid #ddd;background:#fff;cursor:grab;user-select:none}
+  .token.op{background:#f3f4f6}
+  .token.dragging{opacity:0.5}
+  .zone{min-height:54px;border:2px dashed transparent;padding:10px;border-radius:10px;background:#fff;display:flex;flex-wrap:wrap;gap:8px}
+  .zone.drop-ok{border-color:#60a5fa;background:#fbfdff}
+  .zone .token{margin:0;cursor:grab}
+  .zone-title{font-weight:700;margin-bottom:8px}
+  .trash{height:44px;width:120px;border-radius:8px;border:2px dashed #f3a3a3;display:flex;align-items:center;justify-content:center;color:var(--danger);background:#fff5f5;cursor:default}
+  .error{color:var(--danger);font-weight:700;margin-top:6px;display:flex;gap:8px;align-items:center}
+  .ok{color:green;font-weight:700;margin-top:6px}
+  .bottom-controls{display:flex;gap:8px;align-items:center;margin-top:10px}
+  .right{margin-left:auto}
+  .hint{font-size:13px;color:var(--muted);margin-top:6px}
+  .errClear{background:transparent;border:0;color:var(--muted);cursor:pointer;font-weight:700;padding:0 6px}
+  /* TABLE: fixed column widths for nice spacing */
+  table.sensor-table { width:100%; border-collapse:collapse; table-layout:fixed; margin-top:10px; }
+  table.sensor-table colgroup col.col-id { width:14%; }
+  table.sensor-table colgroup col.col-topic { width:42%; }
+  table.sensor-table colgroup col.col-path { width:14%; }
+  table.sensor-table colgroup col.col-onvalues { width:18%; }
+  table.sensor-table colgroup col.col-actions { width:12%; }
+  table.sensor-table th, table.sensor-table td { padding:8px; border-bottom:1px solid #f0f0f0; text-align:left; vertical-align:middle; font-size:13px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  table.sensor-table th { font-weight:700; }
+  /* allow topic to wrap if it's too long but keep columns */
+  table.sensor-table td.topic { white-space:normal; word-break:break-word; }
+  table.sensor-table td.actions { text-align:center; }
+  @media (max-width:900px) {
+    table.sensor-table colgroup col.col-topic { width:40%; }
+    table.sensor-table colgroup col.col-id { width:18%; }
+    table.sensor-table colgroup col.col-path { width:12%; }
+    table.sensor-table colgroup col.col-onvalues { width:18%; }
+    table.sensor-table colgroup col.col-actions { width:12%; }
+  }
+  @media (max-width:600px) {
+    table.sensor-table { font-size:12px; }
+    table.sensor-table td, table.sensor-table th { padding:6px; }
+  }
+</style>
+</head>
+<body>
+  <h1>WLED Sensor JSON Builder — v7</h1>
+  <p class="muted">This is the same editor as before — I just fixed the sensor table layout so columns are nicely spaced again. Palette + drag/drop behavior unchanged.</p>
+
+  <div class="card">
+    <h3>Import / Export</h3>
+    <label>Paste JSON to import</label>
+    <textarea id="importJson" placeholder='{"sensors":[...],"logic_true":"...","logic_false":"..."}'></textarea>
+    <div class="row" style="margin-top:8px">
+      <div class="controls">
+        <button id="loadJsonBtn">Load JSON</button>
+        <button id="loadFileBtn">Load JSON file</button>
+        <input type="file" id="filePicker" accept=".json" style="display:none" />
+      </div>
+      <div class="hint right">IDs sanitized to lowercase underscores. Errors show below.</div>
+    </div>
+    <div id="importError" class="error" style="display:none"></div>
+  </div>
+
+  <div class="card">
+    <h3>1) Add sensor</h3>
+    <div class="row">
+      <div class="col"><label>id</label><input id="new_id" placeholder="kitchen_wave"/><div class="small">Sanitized to lowercase (a-z0-9_)</div></div>
+      <div class="col"><label>topic</label><input id="new_topic" placeholder="zigbee2mqtt/Küche mWave"/></div>
+      <div class="col"><label>path (optional)</label><input id="new_path" placeholder="presence"/></div>
+      <div style="min-width:220px"><label>on_values</label><input id="new_onvalues" value="on,true,1"/><div class="small">Spaces removed, comma-separated</div></div>
+      <div style="align-self:end"><button id="addSensorBtn">Add sensor</button></div>
+    </div>
+    <div id="addError" class="error" style="display:none"></div>
+
+    <div style="margin-top:12px">
+      <label>Existing sensors</label>
+      <table class="sensor-table" id="sensorTable">
+        <colgroup>
+          <col class="col-id" />
+          <col class="col-topic" />
+          <col class="col-path" />
+          <col class="col-onvalues" />
+          <col class="col-actions" />
+        </colgroup>
+        <thead><tr><th>id</th><th>topic</th><th>path</th><th>on_values</th><th>actions</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div id="noSensorsMsg" class="muted">No sensors yet</div>
+    </div>
+
+    <div id="editPanel" style="display:none;margin-top:10px;padding:10px;border:1px dashed #eee;border-radius:8px;background:#fff">
+      <div style="display:flex;justify-content:space-between;align-items:center"><div><strong>Edit sensor</strong> <span id="editingId"></span></div>
+        <div><button id="saveEditBtn">Save</button><button id="cancelEditBtn" class="danger">Cancel</button></div></div>
+      <div style="margin-top:8px" class="row">
+        <div class="col"><label>id</label><input id="edit_id" /></div>
+        <div class="col"><label>topic</label><input id="edit_topic" /></div>
+        <div class="col"><label>path</label><input id="edit_path" /></div>
+        <div style="min-width:220px"><label>on_values</label><input id="edit_onvalues" /></div>
+      </div>
+      <div id="editError" class="error" style="display:none"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Palette & Build logic</h3>
+
+    <label>Token palette (drag operators or sensors)</label>
+    <div id="tokenPalette" class="palette"></div>
+    <div class="hint">Operators: <code>AND</code>, <code>OR</code> (uppercase), parentheses <code>(</code> <code>)</code>, and boolean <code>true</code>/<code>false</code>. Special <code>!</code> token - drop onto a sensor token to toggle NOT.</div>
+
+    <div style="margin-top:12px">
+      <div class="zone-title">logic_true</div>
+      <div id="zoneTrue" class="zone" data-field="logic_true"></div>
+      <div id="errTrue" class="error" style="display:none"><span id="errTrueText"></span><button class="errClear" data-target="errTrue">✖</button></div>
+    </div>
+
+    <div style="margin-top:14px">
+      <div class="zone-title">logic_false <span class="small">(optional)</span></div>
+      <div id="zoneFalse" class="zone" data-field="logic_false"></div>
+      <div id="errFalse" class="error" style="display:none"><span id="errFalseText"></span><button class="errClear" data-target="errFalse">✖</button></div>
+    </div>
+
+    <div style="margin-top:12px;display:flex;gap:12px;align-items:center">
+      <div class="trash" id="trash">REMOVE</div>
+      <div class="small muted">Drag tokens to REMOVE to delete. Reorder by dragging within a zone or move tokens between zones.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Generate JSON</h3>
+    <label>Result JSON</label>
+    <textarea id="result" readonly placeholder="Generated JSON"></textarea>
+    <div class="bottom-controls">
+      <button id="generateBtn">Generate JSON</button>
+      <button id="downloadBtn" disabled>Download .json</button>
+      <button id="copyBtn">Copy to clipboard</button>
+      <button id="prettyBtn">Pretty / Minify toggle</button>
+      <div id="generateMsg" class="muted right"></div>
+    </div>
+  </div>
+
+<script>
+/* ---------- state ---------- */
+let sensors = [];
+let tokensTrue = [];
+let tokensFalse = [];
+let editingIndex = -1;
+let pretty = true;
+
+/* ---------- dom refs ---------- */
+const newId = document.getElementById('new_id');
+const newTopic = document.getElementById('new_topic');
+const newPath = document.getElementById('new_path');
+const newOnvalues = document.getElementById('new_onvalues');
+const addSensorBtn = document.getElementById('addSensorBtn');
+const addError = document.getElementById('addError');
+const sensorTableBody = document.querySelector('#sensorTable tbody');
+const noSensorsMsg = document.getElementById('noSensorsMsg');
+
+const editPanel = document.getElementById('editPanel');
+const editingIdLabel = document.getElementById('editingId');
+const edit_id = document.getElementById('edit_id');
+const edit_topic = document.getElementById('edit_topic');
+const edit_path = document.getElementById('edit_path');
+const edit_onvalues = document.getElementById('edit_onvalues');
+const saveEditBtn = document.getElementById('saveEditBtn');
+const cancelEditBtn = document.getElementById('cancelEditBtn');
+const editError = document.getElementById('editError');
+
+const tokenPalette = document.getElementById('tokenPalette');
+let zoneTrue = document.getElementById('zoneTrue');
+let zoneFalse = document.getElementById('zoneFalse');
+const trash = document.getElementById('trash');
+const errTrue = document.getElementById('errTrue');
+const errFalse = document.getElementById('errFalse');
+const errTrueText = document.getElementById('errTrueText');
+const errFalseText = document.getElementById('errFalseText');
+
+const importJson = document.getElementById('importJson');
+const loadJsonBtn = document.getElementById('loadJsonBtn');
+const filePicker = document.getElementById('filePicker');
+const loadFileBtn = document.getElementById('loadFileBtn');
+const importError = document.getElementById('importError');
+
+const result = document.getElementById('result');
+const generateBtn = document.getElementById('generateBtn');
+const downloadBtn = document.getElementById('downloadBtn');
+const copyBtn = document.getElementById('copyBtn');
+const prettyBtn = document.getElementById('prettyBtn');
+const generateMsg = document.getElementById('generateMsg');
+
+/* ---------- helpers ---------- */
+function sanitizeId(s){
+  if(!s) return '';
+  return String(s).trim().toLowerCase().replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,'');
+}
+function onValuesSanitize(s){
+  return (s||'').split(',').map(p=>p.trim()).filter(p=>p.length).join(',');
+}
+function idExists(id, skipIndex=-1){ return sensors.some((x,i)=>x.id===id && i!==skipIndex); }
+function escapeHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+function isOperator(tok){ return /^(AND|OR)$/i.test(tok); }
+function isOperand(tok){
+  if(typeof tok !== 'string') return false;
+  const t = tok.toLowerCase();
+  if(t==='true' || t==='false') return true;
+  if(t.startsWith('!')) return /^[!][a-z0-9_]+$/i.test(tok);
+  return /^[a-z0-9_]+$/i.test(tok);
+}
+function tokenType(tok){
+  if(tok === '(') return 'open';
+  if(tok === ')') return 'close';
+  if(isOperator(tok)) return 'op';
+  if(isOperand(tok)) return 'operand';
+  return 'unknown';
+}
+
+/* ---------- render ---------- */
+function renderSensorTable(){
+  sensorTableBody.innerHTML = '';
+  if(sensors.length===0){ noSensorsMsg.style.display='block'; } else { noSensorsMsg.style.display='none'; }
+  sensors.forEach((s, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><code>${escapeHtml(s.id)}</code></td>
+      <td class="topic">${escapeHtml(s.topic)}</td><td>${escapeHtml(s.path||'')}</td>
+      <td><code>${escapeHtml(s.on_values)}</code></td>
+      <td class="actions">
+        <button data-idx="${idx}" class="editBtn">edit</button>
+        <button data-idx="${idx}" class="delBtn danger">delete</button>
+      </td>`;
+    sensorTableBody.appendChild(tr);
+  });
+}
+
+/* ---------- palette ---------- */
+function renderPalette(){
+  tokenPalette.innerHTML = '';
+  sensors.forEach(s => {
+    const span = document.createElement('span');
+    span.className='token';
+    span.draggable = true;
+    span.textContent = s.id;
+    span.dataset.token = s.id;
+    span.dataset.kind = 'sensor';
+    tokenPalette.appendChild(span);
+    span.addEventListener('dragstart', paletteDragStart);
+    span.addEventListener('dragend', paletteDragEnd);
+    span.addEventListener('dblclick', ()=>{ tokensTrue.push(s.id); updateZones(); });
+  });
+  const ops = ['AND','OR','(',')','true','false','!'];
+  ops.forEach(op => {
+    const sp = document.createElement('span');
+    sp.className = 'token' + ((op==='AND' || op==='OR') ? ' op' : '');
+    sp.draggable = true;
+    sp.textContent = op;
+    sp.dataset.token = op;
+    sp.dataset.kind = 'op';
+    tokenPalette.appendChild(sp);
+    sp.addEventListener('dragstart', paletteDragStart);
+    sp.addEventListener('dragend', paletteDragEnd);
+    sp.addEventListener('dblclick', ()=>{ if(op !== '!') { tokensTrue.push(op); updateZones(); } });
+  });
+}
+
+/* ---------- zone rendering ---------- */
+function createTokenElement(tk, field, idx){
+  const span = document.createElement('span');
+  span.className = 'token' + (isOperator(tk) ? ' op' : '');
+  span.draggable = true;
+  span.textContent = tk;
+  span.dataset.token = tk;
+  span.dataset.field = field;
+  span.dataset.index = idx;
+
+  span.addEventListener('dragstart', (e) => {
+    e.dataTransfer.setData('text/plain', tk);
+    e.dataTransfer.setData('source','token');
+    e.dataTransfer.setData('fromField', field);
+    e.dataTransfer.setData('fromIndex', String(idx));
+    e.dataTransfer.effectAllowed = 'move';
+    span.classList.add('dragging');
+  });
+  span.addEventListener('dragend', ()=> span.classList.remove('dragging'));
+
+  span.addEventListener('dragover', (e) => { e.preventDefault(); span.classList.add('drop-ok'); });
+  span.addEventListener('dragleave', ()=> span.classList.remove('drop-ok'));
+  span.addEventListener('drop', (e) => {
+    e.preventDefault(); e.stopPropagation(); span.classList.remove('drop-ok');
+    const token = e.dataTransfer.getData('text/plain');
+    const source = e.dataTransfer.getData('source');
+    if(source === 'palette' && token === '!'){
+      const arr = (field==='logic_true')? tokensTrue : tokensFalse;
+      if(isOperand(arr[idx]) && !arr[idx].startsWith('!') && !isOperator(arr[idx])){
+        arr[idx] = '!' + arr[idx];
+        updateZones();
+      } else {
+        flashZoneError(field, 'NOT (!) must be dropped onto a sensor token (not operator).');
+      }
+      return;
+    }
+    if(source === 'token'){
+      const fromField = e.dataTransfer.getData('fromField');
+      const fromIndex = parseInt(e.dataTransfer.getData('fromIndex')||'-1');
+      if(!isNaN(fromIndex) && fromIndex>=0){ moveTokenBetweenFields(fromField, fromIndex, field, idx); }
+      return;
+    }
+    if(source === 'palette'){ insertPaletteTokenIntoFieldAt(field, token, idx); return; }
+  });
+
+  span.addEventListener('click', ()=> {
+    const z = (field === 'logic_true') ? zoneTrue : zoneFalse;
+    z.scrollIntoView({behavior:'smooth', block:'center'});
+  });
+  return span;
+}
+
+function updateZones(){
+  renderSensorTable();
+  renderPalette();
+  zoneTrue.innerHTML = '';
+  tokensTrue.forEach((tk, idx) => zoneTrue.appendChild(createTokenElement(tk, 'logic_true', idx)));
+  zoneFalse.innerHTML = '';
+  tokensFalse.forEach((tk, idx) => zoneFalse.appendChild(createTokenElement(tk, 'logic_false', idx)));
+  validateBoth();
+}
+
+/* ---------- drag handlers ---------- */
+function paletteDragStart(e){
+  const token = e.target.dataset.token;
+  e.dataTransfer.setData('text/plain', token);
+  e.dataTransfer.setData('source','palette');
+  e.dataTransfer.effectAllowed = 'copy';
+  e.target.classList.add('dragging');
+}
+function paletteDragEnd(e){ e.target.classList.remove('dragging'); }
+
+function zoneDragOver(e){
+  e.preventDefault();
+  e.currentTarget.classList.add('drop-ok');
+  e.dataTransfer.dropEffect = 'copy';
+}
+function zoneDragLeave(e){ e.currentTarget.classList.remove('drop-ok'); }
+function zoneDrop(e){
+  e.preventDefault();
+  e.currentTarget.classList.remove('drop-ok');
+  const token = e.dataTransfer.getData('text/plain');
+  const source = e.dataTransfer.getData('source');
+  const fromField = e.dataTransfer.getData('fromField');
+  const fromIndex = parseInt(e.dataTransfer.getData('fromIndex')||'-1');
+  const fieldName = (e.currentTarget.id === 'zoneTrue') ? 'logic_true' : 'logic_false';
+  const z = e.currentTarget;
+  const children = Array.from(z.children);
+  let insertIdx = children.length;
+  if(children.length > 0){
+    for(let i=0;i<children.length;i++){
+      const r = children[i].getBoundingClientRect();
+      if(e.clientX < (r.left + r.width/2)){ insertIdx = i; break; }
+    }
+  } else insertIdx = 0;
+  if(source === 'token'){
+    if(!isNaN(fromIndex) && fromIndex >= 0){ moveTokenBetweenFields(fromField, fromIndex, fieldName, insertIdx); }
+    return;
+  }
+  if(source === 'palette'){
+    if(token === '!'){
+      const dest = (fieldName === 'logic_true') ? tokensTrue : tokensFalse;
+      if(insertIdx < dest.length && isOperand(dest[insertIdx]) && !dest[insertIdx].startsWith('!') && !isOperator(dest[insertIdx])){
+        dest[insertIdx] = '!' + dest[insertIdx];
+        updateZones();
+      } else {
+        flashZoneError(fieldName, 'NOT (!) must be dropped onto an existing sensor token.');
+      }
+      return;
+    }
+    insertPaletteTokenIntoFieldAt(fieldName, token, insertIdx);
+    return;
+  }
+}
+
+/* attach once */
+zoneTrue.addEventListener('dragover', zoneDragOver);
+zoneTrue.addEventListener('dragleave', zoneDragLeave);
+zoneTrue.addEventListener('drop', zoneDrop);
+zoneFalse.addEventListener('dragover', zoneDragOver);
+zoneFalse.addEventListener('dragleave', zoneDragLeave);
+zoneFalse.addEventListener('drop', zoneDrop);
+
+/* ---------- insert / move / toggle ---------- */
+function normalizeTokenOnInsert(tok){
+  if(typeof tok !== 'string') return tok;
+  const lower = tok.toLowerCase();
+  if(lower === 'and') return 'AND';
+  if(lower === 'or') return 'OR';
+  if(lower === 'true') return 'true';
+  if(lower === 'false') return 'false';
+  if(tok === '(' || tok === ')') return tok;
+  if(tok === '!') return '!';
+  return sanitizeId(tok);
+}
+function insertPaletteTokenIntoFieldAt(field, token, idx){
+  const normalized = normalizeTokenOnInsert(token);
+  const dest = (field === 'logic_true') ? tokensTrue : tokensFalse;
+  if(normalized === '!'){
+    if(idx < dest.length && isOperand(dest[idx]) && !dest[idx].startsWith('!') && !isOperator(dest[idx])){
+      dest[idx] = '!' + dest[idx]; updateZones(); return;
+    } else { flashZoneError(field, 'NOT (!) must be dropped onto an existing sensor token.'); return; }
+  }
+  dest.splice(idx,0, normalized);
+  updateZones();
+}
+function moveTokenBetweenFields(fromField, fromIdx, toField, toIdx){
+  const src = (fromField === 'logic_true') ? tokensTrue : tokensFalse;
+  const dst = (toField === 'logic_true') ? tokensTrue : tokensFalse;
+  if(fromField === toField){
+    const [m] = src.splice(fromIdx,1);
+    dst.splice(toIdx,0,m);
+  } else {
+    const [m] = src.splice(fromIdx,1);
+    dst.splice(toIdx,0,m);
+  }
+  updateZones();
+}
+
+/* ---------- trash ---------- */
+trash.addEventListener('dragover', (e)=>{ e.preventDefault(); trash.style.borderColor='#ff6b6b'; });
+trash.addEventListener('dragleave', ()=>{ trash.style.borderColor='#f3a3a3'; });
+trash.addEventListener('drop', (e)=> {
+  e.preventDefault(); trash.style.borderColor='#f3a3a3';
+  const source = e.dataTransfer.getData('source');
+  if(source === 'token'){
+    const fromField = e.dataTransfer.getData('fromField');
+    const fromIndex = parseInt(e.dataTransfer.getData('fromIndex')||'-1');
+    if(fromField && fromIndex>=0){
+      const arr = (fromField==='logic_true')? tokensTrue : tokensFalse;
+      arr.splice(fromIndex,1);
+      updateZones();
+    }
+  }
+});
+
+/* ---------- validation ---------- */
+function tokenizeString(expr){
+  if(!expr) return [];
+  const raw = expr.match(/!?[a-zA-Z0-9_]+|\(|\)|\band\b|\bor\b|\btrue\b|\bfalse\b/gi);
+  return raw ? raw.map(t=>t.trim()) : [];
+}
+function normalizeImportedToken(tok){
+  if(typeof tok !== 'string') return tok;
+  const lower = tok.toLowerCase();
+  if(lower === 'and') return 'AND';
+  if(lower === 'or') return 'OR';
+  if(lower === 'true') return 'true';
+  if(lower === 'false') return 'false';
+  if(tok === '(' || tok === ')') return tok;
+  if(tok.startsWith('!')){ const id = sanitizeId(tok.substring(1)); return id ? ('!' + id) : tok; }
+  if(/^[a-z0-9_]+$/i.test(tok)) return sanitizeId(tok);
+  return tok;
+}
+function validateTokenArray(arr){
+  const out = { ok:false, error:'' };
+  if(!arr || arr.length===0){ out.ok = true; return out; }
+  for(const t of arr){ if(/[^a-zA-Z0-9_!()]/.test(t)){ out.error='Invalid token: ' + t; return out; } }
+  let depth = 0;
+  for(const t of arr){ if(t==='(') depth++; else if(t===')'){ depth--; if(depth<0){ out.error='Too many )'; return out; } } }
+  if(depth !== 0){ out.error='Mismatched parentheses'; return out; }
+  const ids = sensors.map(s=>s.id.toLowerCase());
+  for(const t of arr){
+    const tl = String(t).toLowerCase();
+    if(tl === 'true' || tl === 'false' || tl === '(' || tl === ')' || isOperator(tl)) continue;
+    if(tl.startsWith('!')){
+      const id = tl.substring(1);
+      if(!/^[a-z0-9_]+$/.test(id)){ out.error='Invalid token: ' + t; return out; }
+      if(!ids.includes(id)){ out.error='Unknown sensor id: ' + id; return out; }
+      continue;
+    }
+    if(/^[a-z0-9_]+$/.test(tl)){
+      if(!ids.includes(tl)){ out.error='Unknown sensor id: ' + tl; return out; }
+      continue;
+    }
+    out.error='Invalid token: ' + t; return out;
+  }
+  for(let i=0;i<arr.length-1;i++){
+    const a = tokenType(arr[i]);
+    const b = tokenType(arr[i+1]);
+    if((a === 'operand' || a === 'close') && (b === 'operand' || b === 'open')){
+      out.error = 'Missing operator between "' + arr[i] + '" and "' + arr[i+1] + '"'; return out;
+    }
+    if(a === 'op' && b === 'op'){ out.error = 'Consecutive operators near "' + arr[i+1] + '"'; return out; }
+  }
+  if(tokenType(arr[0]) === 'op'){ out.error = 'Expression cannot start with operator'; return out; }
+  if(tokenType(arr[arr.length-1]) === 'op'){ out.error = 'Expression cannot end with operator'; return out; }
+  out.ok = true; return out;
+}
+function validateBoth(){
+  const v1 = validateTokenArray(tokensTrue);
+  const v2 = validateTokenArray(tokensFalse);
+  if(!v1.ok){ errTrue.style.display='flex'; errTrueText.textContent = v1.error; } else { errTrue.style.display='none'; errTrueText.textContent=''; }
+  if(!v2.ok){ errFalse.style.display='flex'; errFalseText.textContent = v2.error; } else { errFalse.style.display='none'; errFalseText.textContent=''; }
+  return v1.ok && v2.ok;
+}
+function flashZoneError(field, msg){
+  const el = (field === 'logic_true') ? errTrue : errFalse;
+  const elText = (field === 'logic_true') ? errTrueText : errFalseText;
+  elText.textContent = msg;
+  el.style.display = 'flex';
+}
+
+/* clear error buttons */
+document.querySelectorAll('.errClear').forEach(btn=>{
+  btn.addEventListener('click', (e)=>{
+    const tgt = btn.dataset.target;
+    const el = document.getElementById(tgt);
+    if(el) el.style.display='none';
+  });
+});
+
+/* ---------- import / load ---------- */
+loadJsonBtn.addEventListener('click', ()=> {
+  importError.style.display='none';
+  const txt = importJson.value.trim();
+  if(!txt){ importError.style.display='block'; importError.textContent='Paste JSON first'; return; }
+  try{ const obj = JSON.parse(txt); loadConfigObject(obj); importJson.value=''; }
+  catch(e){ importError.style.display='block'; importError.textContent='Invalid JSON: ' + (e.message || e); }
+});
+document.getElementById('loadFileBtn').addEventListener('click', ()=> filePicker.click());
+filePicker.addEventListener('change', async (e)=> {
+  const f = e.target.files && e.target.files[0]; if(!f) return;
+  const text = await f.text();
+  try{ const obj = JSON.parse(text); loadConfigObject(obj); filePicker.value=''; } catch(err){ importError.style.display='block'; importError.textContent='Invalid JSON file: ' + (err.message || err); filePicker.value=''; }
+});
+function loadConfigObject(obj){
+  importError.style.display='none';
+  if(!obj || typeof obj !== 'object'){ importError.style.display='block'; importError.textContent='JSON must be an object'; return; }
+  if(!Array.isArray(obj.sensors)){ importError.style.display='block'; importError.textContent='sensors array required'; return; }
+  const newSensors = [];
+  for(const s of obj.sensors){
+    if(!s.id || !s.topic){ importError.style.display='block'; importError.textContent='Each sensor needs id and topic'; return; }
+    const idSan = sanitizeId(String(s.id));
+    if(!idSan){ importError.style.display='block'; importError.textContent='Invalid sensor id after sanitizing: ' + s.id; return; }
+    if(newSensors.some(x=>x.id===idSan)){ importError.style.display='block'; importError.textContent='Duplicate sensor id after sanitizing: ' + idSan; return; }
+    const onvals = onValuesSanitize(String(s.on_values || s.onValues || 'on,true,1'));
+    newSensors.push({ id: idSan, topic: String(s.topic), path: String(s.path||''), on_values: onvals });
+  }
+  sensors = newSensors;
+  tokensTrue = tokenizeString(String(obj.logic_true || '')).map(normalizeImportedToken).filter(t=>t.length);
+  tokensFalse = tokenizeString(String(obj.logic_false || '')).map(normalizeImportedToken).filter(t=>t.length);
+  updateZones();
+  generateMsg.textContent = 'Imported JSON'; setTimeout(()=>generateMsg.textContent='',1200);
+}
+
+/* ---------- add/edit sensors ---------- */
+addSensorBtn.addEventListener('click', ()=> {
+  addError.style.display='none';
+  const id = sanitizeId(newId.value || '');
+  const topic = (newTopic.value || '').trim();
+  const path = (newPath.value || '').trim();
+  const onvals = onValuesSanitize(newOnvalues.value || '');
+  if(!id){ addError.style.display='block'; addError.textContent='Invalid id after sanitizing'; return; }
+  if(!topic){ addError.style.display='block'; addError.textContent='topic required'; return; }
+  if(idExists(id)){ addError.style.display='block'; addError.textContent='ID already exists'; return; }
+  sensors.push({ id, topic, path: path||'', on_values: onvals||'on,true,1' });
+  newId.value=''; newTopic.value=''; newPath.value=''; newOnvalues.value='on,true,1';
+  updateZones();
+});
+
+sensorTableBody.addEventListener('click', (e)=> {
+  const btn = e.target;
+  if(btn.matches('.delBtn')){
+    const idx = Number(btn.dataset.idx);
+    if(!Number.isNaN(idx) && confirm('Delete sensor '+sensors[idx].id+'?')){ sensors.splice(idx,1); updateZones(); }
+  } else if(btn.matches('.editBtn')){
+    const idx = Number(btn.dataset.idx);
+    openEditInline(idx);
+  }
+});
+
+function openEditInline(idx){
+  editingIndex = idx;
+  const s = sensors[idx];
+  editingIdLabel.textContent = s.id;
+  edit_id.value = s.id; edit_topic.value = s.topic; edit_path.value = s.path||''; edit_onvalues.value = s.on_values||'';
+  editPanel.style.display='block'; editError.style.display='none';
+}
+cancelEditBtn.addEventListener('click', ()=>{ editPanel.style.display='none'; editingIndex=-1; });
+saveEditBtn.addEventListener('click', ()=> {
+  editError.style.display='none';
+  if(editingIndex<0){ editError.style.display='block'; editError.textContent='No sensor selected'; return; }
+  const idSan = sanitizeId(edit_id.value || '');
+  const topic = (edit_topic.value || '').trim();
+  const path = (edit_path.value || '').trim();
+  const onvals = onValuesSanitize(edit_onvalues.value || '');
+  if(!idSan){ editError.style.display='block'; editError.textContent='Invalid id after sanitizing'; return; }
+  if(!topic){ editError.style.display='block'; editError.textContent='topic required'; return; }
+  if(idExists(idSan, editingIndex)){ editError.style.display='block'; editError.textContent='Another sensor uses this id'; return; }
+  const oldId = sensors[editingIndex].id;
+  sensors[editingIndex] = { id: idSan, topic, path: path||'', on_values: onvals||'on,true,1' };
+  if(oldId !== idSan){
+    const mapReplace = (arr) => {
+      for(let i=0;i<arr.length;i++){
+        let t = arr[i]; const not = t.startsWith('!'); const bare = not? t.substring(1): t;
+        if(bare === oldId) arr[i] = (not? '!' : '') + idSan;
+      }
+    };
+    mapReplace(tokensTrue); mapReplace(tokensFalse);
+  }
+  editPanel.style.display='none'; editingIndex=-1; updateZones();
+});
+
+/* ---------- generate ---------- */
+generateBtn.addEventListener('click', ()=> {
+  if(sensors.length===0){ alert('Add at least one sensor'); return; }
+  const ok = validateBoth();
+  if(!ok){ if(!confirm('One or more logic fields contain errors. Generate anyway?')) return; }
+  const out = { sensors: sensors.map(s => {
+    const base = { id: s.id, topic: s.topic };
+    if(s.path && s.path.trim()!=='') base.path = s.path;
+    base.on_values = s.on_values;
+    return base;
+  })};
+  const lt = tokensTrue.join(' ').trim();
+  const lf = tokensFalse.join(' ').trim();
+  out.logic_true = lt;
+  if(lf) out.logic_false = lf;
+  result.value = pretty ? JSON.stringify(out, null, 2) : JSON.stringify(out);
+  downloadBtn.disabled = false;
+  generateMsg.textContent = 'JSON generated'; setTimeout(()=>generateMsg.textContent='',1200);
+});
+prettyBtn.addEventListener('click', ()=>{ pretty = !pretty; if(result.value){ const p = JSON.parse(result.value); result.value = pretty ? JSON.stringify(p,null,2) : JSON.stringify(p); } });
+copyBtn.addEventListener('click', async ()=>{ if(!result.value){ alert('No JSON to copy'); return; } try{ await navigator.clipboard.writeText(result.value); copyBtn.textContent='Copied ✓'; setTimeout(()=>copyBtn.textContent='Copy to clipboard',1200); }catch(e){ alert('Copy failed: '+e); } });
+downloadBtn.addEventListener('click', ()=>{ if(!result.value) return; const blob = new Blob([result.value], {type:'application/json'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='sensors.json'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); });
+
+/* ---------- init ---------- */
+function seedEmpty(){ sensors=[]; tokensTrue=[]; tokensFalse=[]; renderSensorTable(); renderPalette(); updateZones(); }
+seedEmpty();
+
+/* expose debug */
+window.getConfig = () => ({ sensors, logic_true: tokensTrue.join(' '), logic_false: tokensFalse.join(' ') });
+
+</script>
+</body>
+</html>
