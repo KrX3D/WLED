@@ -439,9 +439,18 @@ WLED_GLOBAL bool cctICused          _INIT(true);  // CCT IC used (Athom 15W bulb
 #else
 WLED_GLOBAL bool cctICused          _INIT(false); // CCT IC used (Athom 15W bulbs)
 #endif
-WLED_GLOBAL bool gammaCorrectCol    _INIT(true);  // use gamma correction on colors
-WLED_GLOBAL bool gammaCorrectBri    _INIT(false); // use gamma correction on brightness
-WLED_GLOBAL float gammaCorrectVal   _INIT(2.2f);  // gamma correction value
+#ifndef LED_GAMMA_CORRECT_COLOR
+  #define LED_GAMMA_CORRECT_COLOR true
+#endif
+#ifndef LED_GAMMA_CORRECT_BRIGHTNESS
+  #define LED_GAMMA_CORRECT_BRIGHTNESS false
+#endif
+#ifndef LED_GAMMA_VALUE
+  #define LED_GAMMA_VALUE 2.2f
+#endif
+WLED_GLOBAL bool gammaCorrectCol    _INIT(LED_GAMMA_CORRECT_COLOR);      // use gamma correction on colors
+WLED_GLOBAL bool gammaCorrectBri    _INIT(LED_GAMMA_CORRECT_BRIGHTNESS); // use gamma correction on brightness
+WLED_GLOBAL float gammaCorrectVal   _INIT(LED_GAMMA_VALUE);              // gamma correction value
 
 // Default primary color (RGBW)
 #ifndef LED_DEFAULT_PRIMARY_R
@@ -473,11 +482,23 @@ WLED_GLOBAL byte colPri[] _INIT_N(({ LED_DEFAULT_PRIMARY_R, LED_DEFAULT_PRIMARY_
 #endif
 WLED_GLOBAL byte colSec[] _INIT_N(({ LED_DEFAULT_SECONDARY_R, LED_DEFAULT_SECONDARY_G, LED_DEFAULT_SECONDARY_B, LED_DEFAULT_SECONDARY_W }));      // current RGB(W) secondary color
 
-WLED_GLOBAL byte nightlightTargetBri _INIT(0);      // brightness after nightlight is over
-WLED_GLOBAL byte nightlightDelayMins _INIT(60);
-WLED_GLOBAL byte nightlightMode      _INIT(NL_MODE_FADE); // See const.h for available modes. Was nightlightFade
+#ifndef NIGHTLIGHT_DEFAULT_TARGET_BRIGHTNESS
+  #define NIGHTLIGHT_DEFAULT_TARGET_BRIGHTNESS 0
+#endif
+#ifndef NIGHTLIGHT_DEFAULT_DURATION_MINS
+  #define NIGHTLIGHT_DEFAULT_DURATION_MINS 60
+#endif
+#ifndef NIGHTLIGHT_DEFAULT_MODE
+  #define NIGHTLIGHT_DEFAULT_MODE NL_MODE_FADE
+#endif
+WLED_GLOBAL byte nightlightTargetBri _INIT(NIGHTLIGHT_DEFAULT_TARGET_BRIGHTNESS); // brightness after nightlight is over
+WLED_GLOBAL byte nightlightDelayMins _INIT(NIGHTLIGHT_DEFAULT_DURATION_MINS);
+WLED_GLOBAL byte nightlightMode      _INIT(NIGHTLIGHT_DEFAULT_MODE); // See const.h for available modes. Was nightlightFade
 
-WLED_GLOBAL byte briMultiplier _INIT(100);          // % of brightness to set (to limit power, if you set it to 50 and set bri to 255, actual brightness will be 127)
+#ifndef LED_DEFAULT_BRI_MULTIPLIER
+  #define LED_DEFAULT_BRI_MULTIPLIER 100
+#endif
+WLED_GLOBAL byte briMultiplier _INIT(LED_DEFAULT_BRI_MULTIPLIER); // % of brightness to set (to limit power, if you set it to 50 and set bri to 255, actual brightness will be 127)
 
 // User Interface CONFIG
 #ifndef SERVERNAME
@@ -707,11 +728,17 @@ WLED_GLOBAL uint8_t paletteBlend _INIT(0);        // determines blending and wra
 // transitions
 WLED_GLOBAL uint8_t       blendingStyle            _INIT(0);      // effect blending/transitionig style
 WLED_GLOBAL bool          transitionActive         _INIT(false);
-WLED_GLOBAL uint16_t      transitionDelay          _INIT(750);    // global transition duration
-WLED_GLOBAL uint16_t      transitionDelayDefault   _INIT(750);    // default transition time (stored in cfg.json)
+#ifndef LED_DEFAULT_TRANSITION_MS
+  #define LED_DEFAULT_TRANSITION_MS 750
+#endif
+WLED_GLOBAL uint16_t      transitionDelay          _INIT(LED_DEFAULT_TRANSITION_MS);    // global transition duration
+WLED_GLOBAL uint16_t      transitionDelayDefault   _INIT(LED_DEFAULT_TRANSITION_MS);    // default transition time (stored in cfg.json)
 WLED_GLOBAL unsigned long transitionStartTime;
 WLED_GLOBAL bool          jsonTransitionOnce       _INIT(false);  // flag to override transitionDelay (playlist, JSON API: "live" & "seg":{"i"} & "tt")
-WLED_GLOBAL uint8_t       randomPaletteChangeTime  _INIT(5);      // amount of time [s] between random palette changes (min: 1s, max: 255s)
+#ifndef LED_DEFAULT_RANDOM_PALETTE_TIME_S
+  #define LED_DEFAULT_RANDOM_PALETTE_TIME_S 5
+#endif
+WLED_GLOBAL uint8_t       randomPaletteChangeTime  _INIT(LED_DEFAULT_RANDOM_PALETTE_TIME_S); // amount of time [s] between random palette changes (min: 1s, max: 255s)
 WLED_GLOBAL bool          useHarmonicRandomPalette _INIT(true);   // use *harmonic* random palette generation (nicer looking) or truly random
 
 // nightlight
