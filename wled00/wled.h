@@ -760,6 +760,7 @@ WLED_GLOBAL bool sendNotificationsRT  _INIT(false);           // master notifica
 WLED_GLOBAL unsigned long notificationSentTime _INIT(0);
 WLED_GLOBAL byte notificationSentCallMode _INIT(CALL_MODE_INIT);
 WLED_GLOBAL uint8_t notificationCount _INIT(0);
+// Sync groups: valid range is 0..8 only (bit mapped)
 #ifndef SYNC_DEFAULT_SEND_GROUPS
   #define SYNC_DEFAULT_SEND_GROUPS 0x01
 #endif
