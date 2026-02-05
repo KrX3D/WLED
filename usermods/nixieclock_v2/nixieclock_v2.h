@@ -120,13 +120,10 @@ public:
 			strip.getSegment(2).setOption(SEG_OPTION_ON, enabled);
 		}
 
-		if (enabled) {
-			if (mainState && UM_ClockEnabled) {
-				displayTime();
-				displayBlanked = false;
-			}
-		} else {
+		if (!enabled) {
 			powerOffNixieTubes();
+		} else if (mainState && UM_ClockEnabled) {
+			displayBlanked = false;
 		}
 
 		#ifdef DEBUG_PRINTF
