@@ -1,0 +1,6 @@
+{
+  "name": "button_relay_toggle_v2",
+  "build": {
+    "libArchive": false
+  }
+}
