@@ -458,10 +458,15 @@ WLED_GLOBAL bool useParallelI2S     _INIT(WLED_DEFAULT_USE_PARALLEL_I2S); // par
   #endif
 #endif
 #ifdef WLED_USE_IC_CCT
-WLED_GLOBAL bool cctICused          _INIT(true);  // CCT IC used (Athom 15W bulbs)
+  #ifndef LED_DEFAULT_CCT_IC_USED
+    #define LED_DEFAULT_CCT_IC_USED true
+  #endif
 #else
-WLED_GLOBAL bool cctICused          _INIT(false); // CCT IC used (Athom 15W bulbs)
+  #ifndef LED_DEFAULT_CCT_IC_USED
+    #define LED_DEFAULT_CCT_IC_USED false
+  #endif
 #endif
+WLED_GLOBAL bool cctICused          _INIT(LED_DEFAULT_CCT_IC_USED); // CCT IC used (Athom 15W bulbs)
 #ifndef LED_GAMMA_CORRECT_COLOR
   #define LED_GAMMA_CORRECT_COLOR true
 #endif
@@ -556,9 +561,18 @@ WLED_GLOBAL byte irEnabled      _INIT(IRTYPE); // Infrared receiver
 WLED_GLOBAL bool irApplyToAllSelected _INIT(!IR_DEFAULT_APPLY_TO_MAIN_SEGMENT_ONLY); //apply IR or ESP-NOW to all selected segments
 
 #ifndef WLED_DISABLE_ALEXA
-WLED_GLOBAL bool alexaEnabled _INIT(false);                       // enable device discovery by Amazon Echo
-WLED_GLOBAL char alexaInvocationName[33] _INIT("Light");          // speech control name of device. Choose something voice-to-text can understand
-WLED_GLOBAL byte alexaNumPresets _INIT(0);                        // number of presets to expose to Alexa, starting from preset 1, up to 9
+  #ifndef ALEXA_DEFAULT_ENABLED
+    #define ALEXA_DEFAULT_ENABLED false
+  #endif
+  #ifndef ALEXA_DEFAULT_INVOCATION_NAME
+    #define ALEXA_DEFAULT_INVOCATION_NAME "Light"
+  #endif
+  #ifndef ALEXA_DEFAULT_NUM_PRESETS
+    #define ALEXA_DEFAULT_NUM_PRESETS 0
+  #endif
+WLED_GLOBAL bool alexaEnabled _INIT(ALEXA_DEFAULT_ENABLED);                       // enable device discovery by Amazon Echo
+WLED_GLOBAL char alexaInvocationName[33] _INIT(ALEXA_DEFAULT_INVOCATION_NAME);    // speech control name of device. Choose something voice-to-text can understand
+WLED_GLOBAL byte alexaNumPresets _INIT(ALEXA_DEFAULT_NUM_PRESETS);                 // number of presets to expose to Alexa, starting from preset 1, up to 9
 #endif
 
 #ifndef ARLS_DEFAULT_TIMEOUT_MS
@@ -586,12 +600,24 @@ WLED_GLOBAL bool arlsForceMaxBri _INIT(ARLS_DEFAULT_FORCE_MAX_BRI);             
  #endif
   WLED_GLOBAL uint16_t e131ProxyUniverse _INIT(0);                  // output this E1.31 (sACN) / ArtNet universe via MAX485 (0 = disabled)
   // dmx CONFIG
-  WLED_GLOBAL byte DMXChannels _INIT(7);        // number of channels per fixture
+  #ifndef WLED_DEFAULT_DMX_CHANNELS
+    #define WLED_DEFAULT_DMX_CHANNELS 7
+  #endif
+  WLED_GLOBAL byte DMXChannels _INIT(WLED_DEFAULT_DMX_CHANNELS);        // number of channels per fixture
   WLED_GLOBAL byte DMXFixtureMap[15] _INIT_N(({ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }));
   // assigns the different channels to different functions. See wled21_dmx.ino for more information.
-  WLED_GLOBAL uint16_t DMXGap _INIT(10);          // gap between the fixtures. makes addressing easier because you don't have to memorize odd numbers when climbing up onto a rig.
-  WLED_GLOBAL uint16_t DMXStart _INIT(10);        // start address of the first fixture
-  WLED_GLOBAL uint16_t DMXStartLED _INIT(0);      // LED from which DMX fixtures start
+  #ifndef WLED_DEFAULT_DMX_GAP
+    #define WLED_DEFAULT_DMX_GAP 10
+  #endif
+  #ifndef WLED_DEFAULT_DMX_START
+    #define WLED_DEFAULT_DMX_START 10
+  #endif
+  #ifndef WLED_DEFAULT_DMX_START_LED
+    #define WLED_DEFAULT_DMX_START_LED 0
+  #endif
+  WLED_GLOBAL uint16_t DMXGap _INIT(WLED_DEFAULT_DMX_GAP);          // gap between the fixtures. makes addressing easier because you don't have to memorize odd numbers when climbing up onto a rig.
+  WLED_GLOBAL uint16_t DMXStart _INIT(WLED_DEFAULT_DMX_START);        // start address of the first fixture
+  WLED_GLOBAL uint16_t DMXStartLED _INIT(WLED_DEFAULT_DMX_START_LED);      // LED from which DMX fixtures start
 #endif
 #ifdef WLED_ENABLE_DMX_INPUT
   WLED_GLOBAL int dmxInputTransmitPin _INIT(0);
@@ -601,16 +627,40 @@ WLED_GLOBAL bool arlsForceMaxBri _INIT(ARLS_DEFAULT_FORCE_MAX_BRI);             
   WLED_GLOBAL DMXInput dmxInput;
 #endif
 
-WLED_GLOBAL uint16_t e131Universe _INIT(1);                       // settings for E1.31 (sACN) protocol (only DMX_MODE_MULTIPLE_* can span over consequtive universes)
-WLED_GLOBAL uint16_t e131Port _INIT(5568);                        // DMX in port. E1.31 default is 5568, Art-Net is 6454
-WLED_GLOBAL byte e131Priority _INIT(0);                           // E1.31 port priority (if != 0 priority handling is active)
+#ifndef WLED_DEFAULT_E131_UNIVERSE
+  #define WLED_DEFAULT_E131_UNIVERSE 1
+#endif
+#ifndef WLED_DEFAULT_E131_PORT
+  #define WLED_DEFAULT_E131_PORT 5568
+#endif
+#ifndef WLED_DEFAULT_E131_PRIORITY
+  #define WLED_DEFAULT_E131_PRIORITY 0
+#endif
+WLED_GLOBAL uint16_t e131Universe _INIT(WLED_DEFAULT_E131_UNIVERSE);                       // settings for E1.31 (sACN) protocol (only DMX_MODE_MULTIPLE_* can span over consequtive universes)
+WLED_GLOBAL uint16_t e131Port _INIT(WLED_DEFAULT_E131_PORT);                        // DMX in port. E1.31 default is 5568, Art-Net is 6454
+WLED_GLOBAL byte e131Priority _INIT(WLED_DEFAULT_E131_PRIORITY);                           // E1.31 port priority (if != 0 priority handling is active)
 WLED_GLOBAL E131Priority highPriority _INIT(3);                   // E1.31 highest priority tracking, init = timeout in seconds
-WLED_GLOBAL byte DMXMode _INIT(DMX_MODE_MULTIPLE_RGB);            // DMX mode (s.a.)
-WLED_GLOBAL uint16_t DMXAddress _INIT(1);                         // DMX start address of fixture, a.k.a. first Channel [for E1.31 (sACN) protocol]
-WLED_GLOBAL uint16_t DMXSegmentSpacing _INIT(0);                  // Number of void/unused channels between each segments DMX channels
+#ifndef WLED_DEFAULT_DMX_MODE
+  #define WLED_DEFAULT_DMX_MODE DMX_MODE_MULTIPLE_RGB
+#endif
+#ifndef WLED_DEFAULT_DMX_ADDRESS
+  #define WLED_DEFAULT_DMX_ADDRESS 1
+#endif
+#ifndef WLED_DEFAULT_DMX_SEGMENT_SPACING
+  #define WLED_DEFAULT_DMX_SEGMENT_SPACING 0
+#endif
+WLED_GLOBAL byte DMXMode _INIT(WLED_DEFAULT_DMX_MODE);            // DMX mode (s.a.)
+WLED_GLOBAL uint16_t DMXAddress _INIT(WLED_DEFAULT_DMX_ADDRESS);                         // DMX start address of fixture, a.k.a. first Channel [for E1.31 (sACN) protocol]
+WLED_GLOBAL uint16_t DMXSegmentSpacing _INIT(WLED_DEFAULT_DMX_SEGMENT_SPACING);                  // Number of void/unused channels between each segments DMX channels
 WLED_GLOBAL byte e131LastSequenceNumber[E131_MAX_UNIVERSE_COUNT]; // to detect packet loss
-WLED_GLOBAL bool e131Multicast _INIT(false);                      // multicast or unicast
-WLED_GLOBAL bool e131SkipOutOfSequence _INIT(false);              // freeze instead of flickering
+#ifndef WLED_DEFAULT_E131_MULTICAST
+  #define WLED_DEFAULT_E131_MULTICAST false
+#endif
+#ifndef WLED_DEFAULT_E131_SKIP_OUT_OF_SEQUENCE
+  #define WLED_DEFAULT_E131_SKIP_OUT_OF_SEQUENCE false
+#endif
+WLED_GLOBAL bool e131Multicast _INIT(WLED_DEFAULT_E131_MULTICAST);                      // multicast or unicast
+WLED_GLOBAL bool e131SkipOutOfSequence _INIT(WLED_DEFAULT_E131_SKIP_OUT_OF_SEQUENCE);              // freeze instead of flickering
 WLED_GLOBAL uint16_t pollReplyCount _INIT(0);                     // count number of replies for ArtPoll node report
 
 // mqtt
@@ -669,17 +719,41 @@ WLED_GLOBAL bool retainMqttMsg _INIT(MQTT_DEFAULT_RETAIN);                      
 #endif
 
 #ifndef WLED_DISABLE_HUESYNC
-WLED_GLOBAL bool huePollingEnabled _INIT(false);           // poll hue bridge for light state
-WLED_GLOBAL uint16_t huePollIntervalMs _INIT(2500);        // low values (< 1sec) may cause lag but offer quicker response
+  #ifndef HUE_DEFAULT_POLLING_ENABLED
+    #define HUE_DEFAULT_POLLING_ENABLED false
+  #endif
+  #ifndef HUE_DEFAULT_POLL_INTERVAL_MS
+    #define HUE_DEFAULT_POLL_INTERVAL_MS 2500
+  #endif
+  #ifndef HUE_DEFAULT_LIGHT_ID
+    #define HUE_DEFAULT_LIGHT_ID 1
+  #endif
+  #ifndef HUE_DEFAULT_IP
+    #define HUE_DEFAULT_IP 0,0,0,0
+  #endif
+  #ifndef HUE_DEFAULT_APPLY_ONOFF
+    #define HUE_DEFAULT_APPLY_ONOFF true
+  #endif
+  #ifndef HUE_DEFAULT_APPLY_BRI
+    #define HUE_DEFAULT_APPLY_BRI true
+  #endif
+  #ifndef HUE_DEFAULT_APPLY_COLOR
+    #define HUE_DEFAULT_APPLY_COLOR true
+  #endif
+WLED_GLOBAL bool huePollingEnabled _INIT(HUE_DEFAULT_POLLING_ENABLED);           // poll hue bridge for light state
+WLED_GLOBAL uint16_t huePollIntervalMs _INIT(HUE_DEFAULT_POLL_INTERVAL_MS);        // low values (< 1sec) may cause lag but offer quicker response
 WLED_GLOBAL char hueApiKey[47] _INIT("api");               // key token will be obtained from bridge
-WLED_GLOBAL byte huePollLightId _INIT(1);                  // ID of hue lamp to sync to. Find the ID in the hue app ("about" section)
-WLED_GLOBAL IPAddress hueIP _INIT_N(((0, 0, 0, 0))); // IP address of the bridge
-WLED_GLOBAL bool hueApplyOnOff _INIT(true);
-WLED_GLOBAL bool hueApplyBri _INIT(true);
-WLED_GLOBAL bool hueApplyColor _INIT(true);
+WLED_GLOBAL byte huePollLightId _INIT(HUE_DEFAULT_LIGHT_ID);                  // ID of hue lamp to sync to. Find the ID in the hue app ("about" section)
+WLED_GLOBAL IPAddress hueIP _INIT_N(((HUE_DEFAULT_IP))); // IP address of the bridge
+WLED_GLOBAL bool hueApplyOnOff _INIT(HUE_DEFAULT_APPLY_ONOFF);
+WLED_GLOBAL bool hueApplyBri _INIT(HUE_DEFAULT_APPLY_BRI);
+WLED_GLOBAL bool hueApplyColor _INIT(HUE_DEFAULT_APPLY_COLOR);
 #endif
 
-WLED_GLOBAL uint16_t serialBaud _INIT(1152); // serial baud rate, multiply by 100
+#ifndef SERIAL_DEFAULT_BAUD
+  #define SERIAL_DEFAULT_BAUD 1152
+#endif
+WLED_GLOBAL uint16_t serialBaud _INIT(SERIAL_DEFAULT_BAUD); // serial baud rate, multiply by 100
 WLED_GLOBAL bool     serialCanRX _INIT(false);
 WLED_GLOBAL bool     serialCanTX _INIT(false);
 
