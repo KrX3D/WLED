@@ -342,7 +342,10 @@ WLED_GLOBAL char ntpServerName[33] _INIT(WLED_NTP_SERVER);   // NTP server to us
 
 // WiFi CONFIG (all these can be changed via web UI, no need to set them here)
 WLED_GLOBAL std::vector<WiFiConfig> multiWiFi;
-WLED_GLOBAL IPAddress dnsAddress _INIT_N(((  8,   8,  8,  8)));   // Google's DNS
+#ifndef WIFI_DEFAULT_DNS
+  #define WIFI_DEFAULT_DNS 8,8,8,8
+#endif
+WLED_GLOBAL IPAddress dnsAddress _INIT_N(((WIFI_DEFAULT_DNS)));   // DNS server address
 WLED_GLOBAL char cmDNS[33]       _INIT(MDNS_NAME);                // mDNS address (*.local, replaced by wledXXXXXX if default is used)
 WLED_GLOBAL char apSSID[33]      _INIT("");                       // AP off by default (unless setup)
 #ifndef WIFI_DEFAULT_NO_WIFI_SLEEP
@@ -351,6 +354,18 @@ WLED_GLOBAL char apSSID[33]      _INIT("");                       // AP off by d
   #else
     #define WIFI_DEFAULT_NO_WIFI_SLEEP false
   #endif
+#endif
+#ifndef WIFI_DEFAULT_AP_CHANNEL
+  #define WIFI_DEFAULT_AP_CHANNEL 1
+#endif
+#ifndef WIFI_DEFAULT_AP_HIDE
+  #define WIFI_DEFAULT_AP_HIDE false
+#endif
+#ifndef WIFI_DEFAULT_AP_BEHAVIOR
+  #define WIFI_DEFAULT_AP_BEHAVIOR AP_BEHAVIOR_BOOT_NO_CONN
+#endif
+#ifndef WIFI_DEFAULT_FORCE_802_3G
+  #define WIFI_DEFAULT_FORCE_802_3G false
 #endif
 #ifdef WLED_SAVE_RAM
 typedef class WiFiOptions {
@@ -373,9 +388,9 @@ typedef class WiFiOptions {
     }
 } __attribute__ ((aligned(1), packed)) wifi_options_t;
   #ifdef ARDUINO_ARCH_ESP32
-WLED_GLOBAL wifi_options_t wifiOpt _INIT_N(({0, 1, false, AP_BEHAVIOR_BOOT_NO_CONN, WIFI_DEFAULT_NO_WIFI_SLEEP, false}));
+WLED_GLOBAL wifi_options_t wifiOpt _INIT_N(({0, WIFI_DEFAULT_AP_CHANNEL, WIFI_DEFAULT_AP_HIDE, WIFI_DEFAULT_AP_BEHAVIOR, WIFI_DEFAULT_NO_WIFI_SLEEP, WIFI_DEFAULT_FORCE_802_3G}));
   #else
-WLED_GLOBAL wifi_options_t wifiOpt _INIT_N(({0, 1, false, AP_BEHAVIOR_BOOT_NO_CONN, WIFI_DEFAULT_NO_WIFI_SLEEP, false}));
+WLED_GLOBAL wifi_options_t wifiOpt _INIT_N(({0, WIFI_DEFAULT_AP_CHANNEL, WIFI_DEFAULT_AP_HIDE, WIFI_DEFAULT_AP_BEHAVIOR, WIFI_DEFAULT_NO_WIFI_SLEEP, WIFI_DEFAULT_FORCE_802_3G}));
   #endif
 #define selectedWiFi wifiOpt.selectedWiFi
 #define apChannel    wifiOpt.apChannel
@@ -385,22 +400,27 @@ WLED_GLOBAL wifi_options_t wifiOpt _INIT_N(({0, 1, false, AP_BEHAVIOR_BOOT_NO_CO
 #define force802_3g  wifiOpt.force802_3g
 #else
 WLED_GLOBAL int8_t selectedWiFi  _INIT(0);
-WLED_GLOBAL byte apChannel       _INIT(1);                        // 2.4GHz WiFi AP channel (1-13)
-WLED_GLOBAL byte apHide          _INIT(0);                        // hidden AP SSID
-WLED_GLOBAL byte apBehavior      _INIT(AP_BEHAVIOR_BOOT_NO_CONN); // access point opens when no connection after boot by default
+WLED_GLOBAL byte apChannel       _INIT(WIFI_DEFAULT_AP_CHANNEL);  // 2.4GHz WiFi AP channel (1-13)
+WLED_GLOBAL byte apHide          _INIT(WIFI_DEFAULT_AP_HIDE);     // hidden AP SSID
+WLED_GLOBAL byte apBehavior      _INIT(WIFI_DEFAULT_AP_BEHAVIOR); // access point opens when no connection after boot by default
   #ifdef ARDUINO_ARCH_ESP32
 WLED_GLOBAL bool noWifiSleep _INIT(WIFI_DEFAULT_NO_WIFI_SLEEP);                         // disabling modem sleep modes will increase heat output and power usage, but may help with connection issues
   #else
 WLED_GLOBAL bool noWifiSleep _INIT(WIFI_DEFAULT_NO_WIFI_SLEEP);
   #endif
-WLED_GLOBAL bool force802_3g _INIT(false);
+WLED_GLOBAL bool force802_3g _INIT(WIFI_DEFAULT_FORCE_802_3G);
 #endif // WLED_SAVE_RAM
 #ifdef ARDUINO_ARCH_ESP32
   #if defined(LOLIN_WIFI_FIX) && (defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32S3))
-WLED_GLOBAL uint8_t txPower _INIT(WIFI_POWER_8_5dBm);
+    #ifndef WLED_DEFAULT_TX_POWER
+      #define WLED_DEFAULT_TX_POWER WIFI_POWER_8_5dBm
+    #endif
   #else
-WLED_GLOBAL uint8_t txPower _INIT(WIFI_POWER_19_5dBm);
+    #ifndef WLED_DEFAULT_TX_POWER
+      #define WLED_DEFAULT_TX_POWER WIFI_POWER_19_5dBm
+    #endif
   #endif
+WLED_GLOBAL uint8_t txPower _INIT(WLED_DEFAULT_TX_POWER);
 #endif
 #define WLED_WIFI_CONFIGURED isWiFiConfigured()
 
@@ -541,10 +561,22 @@ WLED_GLOBAL char alexaInvocationName[33] _INIT("Light");          // speech cont
 WLED_GLOBAL byte alexaNumPresets _INIT(0);                        // number of presets to expose to Alexa, starting from preset 1, up to 9
 #endif
 
-WLED_GLOBAL uint16_t realtimeTimeoutMs _INIT(2500);               // ms timeout of realtime mode before returning to normal mode
-WLED_GLOBAL int arlsOffset _INIT(0);                              // realtime LED offset
-WLED_GLOBAL bool arlsDisableGammaCorrection _INIT(true);          // activate if gamma correction is handled by the source
-WLED_GLOBAL bool arlsForceMaxBri _INIT(false);                    // enable to force max brightness if source has very dark colors that would be black
+#ifndef ARLS_DEFAULT_TIMEOUT_MS
+  #define ARLS_DEFAULT_TIMEOUT_MS 2500
+#endif
+#ifndef ARLS_DEFAULT_OFFSET
+  #define ARLS_DEFAULT_OFFSET 0
+#endif
+#ifndef ARLS_DEFAULT_DISABLE_GAMMA_CORRECTION
+  #define ARLS_DEFAULT_DISABLE_GAMMA_CORRECTION true
+#endif
+#ifndef ARLS_DEFAULT_FORCE_MAX_BRI
+  #define ARLS_DEFAULT_FORCE_MAX_BRI false
+#endif
+WLED_GLOBAL uint16_t realtimeTimeoutMs _INIT(ARLS_DEFAULT_TIMEOUT_MS);               // ms timeout of realtime mode before returning to normal mode
+WLED_GLOBAL int arlsOffset _INIT(ARLS_DEFAULT_OFFSET);                               // realtime LED offset
+WLED_GLOBAL bool arlsDisableGammaCorrection _INIT(ARLS_DEFAULT_DISABLE_GAMMA_CORRECTION); // activate if gamma correction is handled by the source
+WLED_GLOBAL bool arlsForceMaxBri _INIT(ARLS_DEFAULT_FORCE_MAX_BRI);                    // enable to force max brightness if source has very dark colors that would be black
 
 #ifdef WLED_ENABLE_DMX
  #if defined(ESP8266) || defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32S2)
@@ -652,9 +684,15 @@ WLED_GLOBAL bool     serialCanRX _INIT(false);
 WLED_GLOBAL bool     serialCanTX _INIT(false);
 
 #ifndef WLED_DISABLE_ESPNOW
-WLED_GLOBAL bool enableESPNow        _INIT(false);  // global on/off for ESP-NOW
+  #ifndef WLED_DEFAULT_ENABLE_ESPNOW
+    #define WLED_DEFAULT_ENABLE_ESPNOW false
+  #endif
+  #ifndef WLED_DEFAULT_USE_ESPNOW_SYNC
+    #define WLED_DEFAULT_USE_ESPNOW_SYNC false
+  #endif
+WLED_GLOBAL bool enableESPNow        _INIT(WLED_DEFAULT_ENABLE_ESPNOW);  // global on/off for ESP-NOW
 WLED_GLOBAL byte statusESPNow        _INIT(ESP_NOW_STATE_UNINIT); // state of ESP-NOW stack (0 uninitialised, 1 initialised, 2 error)
-WLED_GLOBAL bool useESPNowSync       _INIT(false);  // use ESP-NOW wireless technology for sync
+WLED_GLOBAL bool useESPNowSync       _INIT(WLED_DEFAULT_USE_ESPNOW_SYNC);  // use ESP-NOW wireless technology for sync
 //WLED_GLOBAL char linked_remote[13]   _INIT("");     // MAC of ESP-NOW remote (Wiz Mote)
 WLED_GLOBAL std::vector<std::array<char, 13>> linked_remotes; // MAC of ESP-NOW remotes (Wiz Mote)
 WLED_GLOBAL char last_signal_src[13] _INIT("");     // last seen ESP-NOW sender
@@ -700,16 +738,29 @@ WLED_GLOBAL byte macroDoublePress[WLED_MAX_BUTTONS]   _INIT({0});
 
 // Security CONFIG
 #ifdef WLED_OTA_PASS
-WLED_GLOBAL bool otaLock        _INIT(true);     // prevents OTA firmware updates without password. ALWAYS enable if system exposed to any public networks
+  #ifndef WLED_DEFAULT_OTA_LOCK
+    #define WLED_DEFAULT_OTA_LOCK true
+  #endif
 #else
-WLED_GLOBAL bool otaLock        _INIT(false);     // prevents OTA firmware updates without password. ALWAYS enable if system exposed to any public networks
+  #ifndef WLED_DEFAULT_OTA_LOCK
+    #define WLED_DEFAULT_OTA_LOCK false
+  #endif
 #endif
-WLED_GLOBAL bool wifiLock       _INIT(false);     // prevents access to WiFi settings when OTA lock is enabled
+WLED_GLOBAL bool otaLock        _INIT(WLED_DEFAULT_OTA_LOCK);     // prevents OTA firmware updates without password. ALWAYS enable if system exposed to any public networks
+#ifndef WLED_DEFAULT_WIFI_LOCK
+  #define WLED_DEFAULT_WIFI_LOCK false
+#endif
+WLED_GLOBAL bool wifiLock       _INIT(WLED_DEFAULT_WIFI_LOCK);     // prevents access to WiFi settings when OTA lock is enabled
 #ifdef WLED_ENABLE_AOTA
-WLED_GLOBAL bool aOtaEnabled    _INIT(true);      // ArduinoOTA allows easy updates directly from the IDE. Careful, it does not auto-disable when OTA lock is on
+  #ifndef WLED_DEFAULT_AOTA_ENABLED
+    #define WLED_DEFAULT_AOTA_ENABLED true
+  #endif
 #else
-WLED_GLOBAL bool aOtaEnabled    _INIT(false);     // ArduinoOTA allows easy updates directly from the IDE. Careful, it does not auto-disable when OTA lock is on
+  #ifndef WLED_DEFAULT_AOTA_ENABLED
+    #define WLED_DEFAULT_AOTA_ENABLED false
+  #endif
 #endif
+WLED_GLOBAL bool aOtaEnabled    _INIT(WLED_DEFAULT_AOTA_ENABLED);  // ArduinoOTA allows easy updates directly from the IDE. Careful, it does not auto-disable when OTA lock is on
 #ifndef OTA_DEFAULT_SAME_SUBNET
   #define OTA_DEFAULT_SAME_SUBNET true
 #endif
