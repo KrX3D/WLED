@@ -1612,12 +1612,8 @@ void UsermodHourEffect::_SetLedsOn(bool state) {
   #endif
 
   if (!NixieLed) {
-    if (state && BlockTriggers) {
-      _logUsermodHourEffect("[SET-LEDS] NixieLed disabled but effect running, overriding LED gate");
-    } else {
-      _logUsermodHourEffect("[SET-LEDS] NixieLed disabled, skipping LED control");
-      return;
-    }
+    _logUsermodHourEffect("[SET-LEDS] NixieLed disabled, skipping LED control");
+    return;
   }
   
   _logUsermodHourEffect("[SET-LEDS] Turning LEDs %s: current brightness=%d, briLast=%d", 
