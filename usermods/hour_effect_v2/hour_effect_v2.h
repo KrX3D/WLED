@@ -216,6 +216,7 @@ private:
   // Track if state change is from this usermod
   bool internalStateChange = false;
   uint8_t lastBrightness = 0;
+  uint8_t lastNonZeroBrightness = 0;
   
   // Enhanced MQTT sensor configurations
   SensorConfig presenceConfig;

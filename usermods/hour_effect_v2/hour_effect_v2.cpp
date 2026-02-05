@@ -283,6 +283,9 @@ void UsermodHourEffect::onStateChange(uint8_t mode) {
       _logUsermodHourEffect("[STATE-CHANGE] ON/OFF state unchanged, no MQTT lamp control needed");
     }
     
+    if (bri > 0) {
+      lastNonZeroBrightness = bri;
+    }
     lastBrightness = bri;
   } else {
     _logUsermodHourEffect("[STATE-CHANGE] Brightness unchanged at %d", bri);
@@ -939,6 +942,13 @@ void UsermodHourEffect::setup() {
   
   // Initialize lastBrightness
   lastBrightness = bri;
+  if (bri > 0) {
+    lastNonZeroBrightness = bri;
+  } else if (briLast > 0) {
+    lastNonZeroBrightness = briLast;
+  } else {
+    lastNonZeroBrightness = 128;
+  }
   _logUsermodHourEffect("[SETUP] Initialized lastBrightness=%d", lastBrightness);
 
   #ifdef USERMOD_NIXIECLOCK
@@ -1602,8 +1612,12 @@ void UsermodHourEffect::_SetLedsOn(bool state) {
   #endif
 
   if (!NixieLed) {
-    _logUsermodHourEffect("[SET-LEDS] NixieLed disabled, skipping LED control");
-    return;
+    if (state && BlockTriggers) {
+      _logUsermodHourEffect("[SET-LEDS] NixieLed disabled but effect running, overriding LED gate");
+    } else {
+      _logUsermodHourEffect("[SET-LEDS] NixieLed disabled, skipping LED control");
+      return;
+    }
   }
   
   _logUsermodHourEffect("[SET-LEDS] Turning LEDs %s: current brightness=%d, briLast=%d", 
@@ -1616,18 +1630,25 @@ void UsermodHourEffect::_SetLedsOn(bool state) {
     // Restore brightness if it is currently off.
     if (bri == 0) {
     //if (bri == 0 && briLast > 0) {  // Prevent restoring 0 brightness
-      bri = briLast;
+      uint8_t targetBrightness = briLast > 0 ? briLast : lastNonZeroBrightness;
+      if (targetBrightness == 0) {
+        targetBrightness = 128;
+      }
+      bri = targetBrightness;
+      lastNonZeroBrightness = bri;
       _logUsermodHourEffect("[SET-LEDS] Restoring brightness: 0 -> %d", bri);
       applyFinalBri();
       lastBrightness = bri;
       controlMqttLamps(true);
     } else {
+      lastNonZeroBrightness = bri;
       _logUsermodHourEffect("[SET-LEDS] LEDs already ON (bri=%d), no action", bri);
     }
   } else {
     // Save current brightness and then turn off LEDs.
     if (bri != 0) {
       briLast = bri;
+      lastNonZeroBrightness = bri;
 	  //if (bri > 0) {  // Only update if bri is actually non-zero
       _logUsermodHourEffect("[SET-LEDS] Saving brightness: %d -> briLast", briLast);
       bri = 0;
@@ -1733,6 +1754,9 @@ void UsermodHourEffect::_RestoreLedState() {
   // Restore brightness
   _logUsermodHourEffect("[RESTORE-STATE] Restoring brightness: %d -> %d", bri, LastBriValue);
   bri = LastBriValue;
+  if (bri > 0) {
+    lastNonZeroBrightness = bri;
+  }
   lastBrightness = bri;
 
   // Update display
