@@ -109,10 +109,11 @@ public:
 
 	// Explicit helper for callers that want "true = enabled".
 	void setNixiePowerEnabled(bool enabled) {
-		if (nixiePower == enabled) {
+		if (mainState == enabled && nixiePower == enabled) {
 			return;
 		}
 
+		mainState = enabled;
 		nixiePower = enabled;
 		displayBlanked = !enabled;
 
@@ -120,9 +121,21 @@ public:
 			strip.getSegment(2).setOption(SEG_OPTION_ON, enabled);
 		}
 
+		if (enabled) {
+			if (bri == 0 && briLast > 0) {
+				bri = briLast;
+				applyFinalBri();
+			}
+		} else if (bri > 0) {
+			briLast = bri;
+			bri = 0;
+			applyFinalBri();
+		}
+
 		if (!enabled) {
 			powerOffNixieTubes();
-		} else if (mainState && UM_ClockEnabled) {
+		} else if (UM_ClockEnabled) {
+			displayTime();
 			displayBlanked = false;
 		}
 
