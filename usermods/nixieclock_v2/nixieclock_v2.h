@@ -102,8 +102,8 @@ public:
 	//=====================================================================
 	// Can be used outside of this usermod to control the main power state.
 	// For compatibility with other usermods, "true" disables the nixie clock.
-	void setNixieMainPower(bool disable) {
-		bool enabled = !disable;
+	void setNixieMainPower(bool state) {
+		bool enabled = !state;
 		if (mainState == enabled) {
 			return;
 		}
@@ -111,6 +111,7 @@ public:
 		mainState = enabled;
 
 		if (!enabled) {
+			// If power for Nixie tubes is off, clear the display.
 			powerOffNixieTubes();
 		}
 
@@ -118,9 +119,6 @@ public:
 			_logUsermodNixieClock("Nixie main power set to: %s", enabled ? "ON" : "OFF");
 		#endif
 	}
-
-	// Backwards-compatible alias: "true" disables the nixie clock.
-	void setNixiePower(bool disable) { setNixieMainPower(disable); }
 
 	//=====================================================================
 	// External API: Get LED Enabled Status
