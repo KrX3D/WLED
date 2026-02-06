@@ -99,16 +99,12 @@ public:
     uint16_t getId() override;
 	
 	//=====================================================================
-	// External API: Control Nixie Power
+	// External API: Control Nixie Main Power
 	//=====================================================================
-	// Can be used outside of this usermod to control the power state of Nixie tubes.
-	// For compatibility with other usermods, "true" disables the nixie tubes.
-	void setNixiePower(bool disable) {
-		setNixiePowerEnabled(!disable);
-	}
-
-	// Explicit helper for callers that want "true = enabled".
-	void setNixiePowerEnabled(bool enabled) {
+	// Can be used outside of this usermod to control the main power state.
+	// For compatibility with other usermods, "true" disables the nixie clock.
+	void setNixieMainPower(bool disable) {
+		bool enabled = !disable;
 		if (mainState == enabled) {
 			return;
 		}
@@ -135,9 +131,12 @@ public:
 		}
 
 		#ifdef DEBUG_PRINTF
-			_logUsermodNixieClock("Nixie power set to: %s", enabled ? "ON" : "OFF");
+			_logUsermodNixieClock("Nixie main power set to: %s", enabled ? "ON" : "OFF");
 		#endif
 	}
+
+	// Backwards-compatible alias: "true" disables the nixie clock.
+	void setNixiePower(bool disable) { setNixieMainPower(disable); }
 
 	//=====================================================================
 	// External API: Get LED Enabled Status
