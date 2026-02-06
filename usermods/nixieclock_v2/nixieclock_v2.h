@@ -48,8 +48,7 @@ private:
     bool dotsEnabled = false;
     bool lastSpiState = false;  // Track SPI state to detect failures
     unsigned long lastStateCheck = 0;  // Track when we last checked states
-	bool displayBlanked = false;
-	
+
     // Member variables for non-blocking anti-poisoning
     bool antiPoisoningInProgress = false;
     unsigned long lastAntiPoisoningTime = 0;
@@ -110,24 +109,9 @@ public:
 		}
 
 		mainState = enabled;
-		displayBlanked = !enabled;
-
-		if (enabled) {
-			if (bri == 0 && briLast > 0) {
-				bri = briLast;
-				applyFinalBri();
-			}
-		} else if (bri > 0) {
-			briLast = bri;
-			bri = 0;
-			applyFinalBri();
-		}
 
 		if (!enabled) {
 			powerOffNixieTubes();
-		} else if (UM_ClockEnabled) {
-			displayTime();
-			displayBlanked = false;
 		}
 
 		#ifdef DEBUG_PRINTF
