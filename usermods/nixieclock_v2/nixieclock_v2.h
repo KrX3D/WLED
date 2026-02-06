@@ -109,12 +109,11 @@ public:
 
 	// Explicit helper for callers that want "true = enabled".
 	void setNixiePowerEnabled(bool enabled) {
-		if (mainState == enabled && nixiePower == enabled) {
+		if (mainState == enabled) {
 			return;
 		}
 
 		mainState = enabled;
-		nixiePower = enabled;
 		displayBlanked = !enabled;
 
 		if (enabled) {

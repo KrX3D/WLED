@@ -48,8 +48,16 @@ void UsermodNixieClock::loop() {
 			}
 		}
 	
-		// Only update the display if Nixie tubes should be powered and clock display is enabled.
-		if(mainState && nixiePower && UM_ClockEnabled){
+		// Only update the display if main power is on and clock display is enabled.
+		if (!mainState) {
+			if (displayBlanked) return;
+			// If main power is off, clear the display.
+			powerOffNixieTubes();
+			displayBlanked = true;
+			return;
+		}
+
+		if (nixiePower && UM_ClockEnabled){
 			// --- Anti-Poisoning Routine ---
 			// Every 2 minutes (120000 ms), run the anti-poisoning routine if not already running
 			if (currentMillis - lastAntiPoisoningTime >= 120000 && !antiPoisoningInProgress) {
