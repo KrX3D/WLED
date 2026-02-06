@@ -48,8 +48,7 @@ private:
     bool dotsEnabled = false;
     bool lastSpiState = false;  // Track SPI state to detect failures
     unsigned long lastStateCheck = 0;  // Track when we last checked states
-	bool displayBlanked = false;
-	
+
     // Member variables for non-blocking anti-poisoning
     bool antiPoisoningInProgress = false;
     unsigned long lastAntiPoisoningTime = 0;
@@ -99,20 +98,26 @@ public:
     uint16_t getId() override;
 	
 	//=====================================================================
-	// External API: Control Nixie Power
+	// External API: Control Nixie Main Power
 	//=====================================================================
-	// Can be used outside of this usermod to control the power state of Nixie tubes.
-	void setNixiePower(bool state) {
-		if (mainState != state) {
-			mainState = state;
-			if (!mainState) {
-				displayBlanked = mainState;
-			}
-
-			#ifdef DEBUG_PRINTF
-				_logUsermodNixieClock("Nixie power set to: %s", state ? "ON" : "OFF");
-			#endif
+	// Can be used outside of this usermod to control the main power state.
+	// For compatibility with other usermods, "true" disables the nixie clock.
+	void setNixieMainPower(bool state) {
+		bool enabled = !state;
+		if (mainState == enabled) {
+			return;
 		}
+
+		mainState = enabled;
+
+		if (!enabled) {
+			// If power for Nixie tubes is off, clear the display.
+			powerOffNixieTubes();
+		}
+
+		#ifdef DEBUG_PRINTF
+			_logUsermodNixieClock("Nixie main power set to: %s", enabled ? "ON" : "OFF");
+		#endif
 	}
 
 	//=====================================================================

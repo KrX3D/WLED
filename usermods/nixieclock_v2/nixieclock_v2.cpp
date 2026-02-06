@@ -49,7 +49,7 @@ void UsermodNixieClock::loop() {
 		}
 	
 		// Only update the display if Nixie tubes should be powered and clock display is enabled.
-		if(mainState && nixiePower && UM_ClockEnabled){
+		if (mainState && nixiePower && UM_ClockEnabled){
 			// --- Anti-Poisoning Routine ---
 			// Every 2 minutes (120000 ms), run the anti-poisoning routine if not already running
 			if (currentMillis - lastAntiPoisoningTime >= 120000 && !antiPoisoningInProgress) {
@@ -85,11 +85,6 @@ void UsermodNixieClock::loop() {
 				_logUsermodNixieClock("Triggering automatic recovery after failure");
 				performRecovery();
 			}
-		} else {
-			if (displayBlanked) return;
-			// If power for Nixie tubes is off, clear the display.
-			powerOffNixieTubes();
-			displayBlanked = true;
 		}
 	}
 	//delay(10);
