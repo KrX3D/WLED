@@ -829,9 +829,9 @@ void UsermodHourEffect::NightNothomeTrigger() {
   
   #ifdef USERMOD_NIXIECLOCK
     if (nixie != nullptr) {
-      _logUsermodHourEffect("[NIGHT-HOME-TRIGGER] Calling setNixiePower(%s) on NixieClock usermod", 
+      _logUsermodHourEffect("[NIGHT-HOME-TRIGGER] Calling setNixieMainPower(%s) on NixieClock usermod", 
                             shouldDisable ? "true" : "false");
-      nixie->setNixiePower(shouldDisable);
+      nixie->setNixieMainPower(shouldDisable);
     } else {
       _logUsermodHourEffect("[NIGHT-HOME-TRIGGER] NixieClock usermod not loaded (nixie is null)");
     }
@@ -3282,5 +3282,6 @@ EXAMPLE 4: Blocker with multiple conditions
   "logic_true": "manual_switch",
   "logic_false": "!manual_switch"
 }
+
 
 */
