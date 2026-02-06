@@ -117,10 +117,6 @@ public:
 		nixiePower = enabled;
 		displayBlanked = !enabled;
 
-		if (strip.getSegmentsNum() >= 3) {
-			strip.getSegment(2).setOption(SEG_OPTION_ON, enabled);
-		}
-
 		if (enabled) {
 			if (bri == 0 && briLast > 0) {
 				bri = briLast;
