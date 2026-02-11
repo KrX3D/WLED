@@ -138,6 +138,17 @@
 		<h2>Time setup</h2>
 		Get time from NTP server: <input type="checkbox" name="NT"><br>
 		<input type="text" name="NS" maxlength="32"><br>
+		NTP resync interval:
+		<select name="NP">
+			<option value="1800">Every 30 minutes</option>
+			<option value="3600">Every hour</option>
+			<option value="7200">Every 2 hours</option>
+			<option value="10800">Every 3 hours</option>
+			<option value="14400">Every 4 hours</option>
+			<option value="21600">Every 6 hours</option>
+			<option value="43200">Every 12 hours</option>
+			<option value="86400">Every 24 hours</option>
+		</select><br>
 		Use 24h format: <input type="checkbox" name="CF"><br>
 		Time zone: 
 		<select name="TZ">
