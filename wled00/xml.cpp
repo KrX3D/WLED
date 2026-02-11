@@ -560,19 +560,7 @@ void getSettingsJS(byte subPage, Print& settingsScript)
     printSetFormCheckbox(settingsScript,PSTR("NT"),ntpEnabled);
     printSetFormValue(settingsScript,PSTR("NS"),ntpServerName);
     printSetFormCheckbox(settingsScript,PSTR("CF"),!useAMPM);
-    int syncIntervalIndex;
-    switch (ntpSyncInterval) {
-	    case 86400: syncIntervalIndex = 0; break; // once a day
-	    case 43200: syncIntervalIndex = 1; break; // twice a day (12 hours)
-	    case 21600: syncIntervalIndex = 2; break; // 4 times a day (6 hours)
-	    case 14400: syncIntervalIndex = 3; break; // 6 times a day (4 hours)
-	    case 10800: syncIntervalIndex = 4; break; // 8 times a day (3 hours)
-	    case 7200 : syncIntervalIndex = 5; break; // 12 times a day (2 hours)
-	    case 3600 : syncIntervalIndex = 6; break; // 24 times a day (1 hour)
-	    case 1800 : syncIntervalIndex = 7; break; // 48 times a day (30 minutes)
-	    default  : syncIntervalIndex = 7; break; // Default to 30 minutes if not listed
-    }
-    printSetFormIndex(settingsScript,PSTR("NP"),syncIntervalIndex);
+    printSetFormValue(settingsScript,PSTR("NP"),ntpSyncInterval);
     printSetFormIndex(settingsScript,PSTR("TZ"),currentTimezone);
     printSetFormValue(settingsScript,PSTR("UO"),utcOffsetSecs);
     char tm[32];
