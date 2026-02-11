@@ -343,7 +343,7 @@ WLED_GLOBAL char ntpServerName[33] _INIT(WLED_NTP_SERVER);   // NTP server to us
 // WiFi CONFIG (all these can be changed via web UI, no need to set them here)
 WLED_GLOBAL std::vector<WiFiConfig> multiWiFi;
 #ifndef WIFI_DEFAULT_DNS
-  #define WIFI_DEFAULT_DNS 8,8,8,8
+  #define WIFI_DEFAULT_DNS 8,8,8,8 // Google's DNS
 #endif
 WLED_GLOBAL IPAddress dnsAddress _INIT_N(((WIFI_DEFAULT_DNS)));   // DNS server address
 WLED_GLOBAL char cmDNS[33]       _INIT(MDNS_NAME);                // mDNS address (*.local, replaced by wledXXXXXX if default is used)
