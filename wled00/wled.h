@@ -400,7 +400,7 @@ WLED_GLOBAL wifi_options_t wifiOpt _INIT_N(({0, WIFI_DEFAULT_AP_CHANNEL, WIFI_DE
 #define force802_3g  wifiOpt.force802_3g
 #else
 WLED_GLOBAL int8_t selectedWiFi  _INIT(0);
-WLED_GLOBAL byte apChannel       _INIT(WIFI_DEFAULT_AP_CHANNEL);  // 2.4GHz WiFi AP channel (1-13)
+WLED_GLOBAL byte apChannel       _INIT(6);                        // 2.4GHz WiFi AP channel (1-13)
 WLED_GLOBAL byte apHide          _INIT(WIFI_DEFAULT_AP_HIDE);     // hidden AP SSID
 WLED_GLOBAL byte apBehavior      _INIT(WIFI_DEFAULT_AP_BEHAVIOR); // access point opens when no connection after boot by default
   #ifdef ARDUINO_ARCH_ESP32
@@ -944,7 +944,7 @@ WLED_GLOBAL uint8_t receiveGroups _INIT(SYNC_DEFAULT_RECEIVE_GROUPS);           
 #endif
 #define RECEIVE_DEFAULT_OPTIONS ( (0x67 & ~(1<<5)) | ( (RECEIVE_DEFAULT_DIRECT) ? (1<<5) : 0 ) )
 #ifndef NOTIFY_DEFAULT_DIRECT
-  #define NOTIFY_DEFAULT_DIRECT 0
+  #define NOTIFY_DEFAULT_DIRECT 1
 #endif
 #define NOTIFY_DEFAULT_OPTIONS ( (0x0F & ~(1<<0)) | ( (NOTIFY_DEFAULT_DIRECT) ? (1<<0) : 0 ) )
 #ifdef WLED_SAVE_RAM
