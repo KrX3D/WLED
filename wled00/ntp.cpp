@@ -9,7 +9,7 @@
  * Acquires time from NTP server
  */
 //#define WLED_DEBUG_NTP
-#define NTP_SYNC_INTERVAL 42000UL //Get fresh NTP time about twice per day
+//#define NTP_SYNC_INTERVAL 42000UL //Get fresh NTP time about twice per day
 
 Timezone* tz;
 
@@ -182,7 +182,7 @@ void handleTime() {
 
 void handleNetworkTime()
 {
-  if (ntpEnabled && ntpConnected && millis() - ntpLastSyncTime > (1000*NTP_SYNC_INTERVAL) && WLED_CONNECTED)
+  if (ntpEnabled && ntpConnected && millis() - ntpLastSyncTime > (1000*ntpSyncInterval) && WLED_CONNECTED)
   {
     if (millis() - ntpPacketSentTime > 10000)
     {

@@ -873,6 +873,7 @@ WLED_GLOBAL DNSServer dnsServer;
 #define NTP_NEVER 999000000L
 WLED_GLOBAL bool ntpConnected _INIT(false);
 WLED_GLOBAL time_t localTime _INIT(0);
+WLED_GLOBAL uint32_t ntpSyncInterval _INIT(1800U);
 WLED_GLOBAL unsigned long ntpLastSyncTime _INIT(NTP_NEVER);
 WLED_GLOBAL unsigned long ntpPacketSentTime _INIT(NTP_NEVER);
 WLED_GLOBAL IPAddress ntpServerIP;
