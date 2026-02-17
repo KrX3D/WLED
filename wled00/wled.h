@@ -939,11 +939,47 @@ WLED_GLOBAL uint8_t receiveGroups _INIT(SYNC_DEFAULT_RECEIVE_GROUPS);           
 #ifndef RECEIVE_DEFAULT_DIRECT
   #define RECEIVE_DEFAULT_DIRECT 1
 #endif
-#define RECEIVE_DEFAULT_OPTIONS ( (0x67 & ~(1<<5)) | ( (RECEIVE_DEFAULT_DIRECT) ? (1<<5) : 0 ) )
+#ifndef RECEIVE_DEFAULT_BRIGHTNESS
+  #define RECEIVE_DEFAULT_BRIGHTNESS true
+#endif
+#ifndef RECEIVE_DEFAULT_COLOR
+  #define RECEIVE_DEFAULT_COLOR true
+#endif
+#ifndef RECEIVE_DEFAULT_EFFECTS
+  #define RECEIVE_DEFAULT_EFFECTS true
+#endif
+#ifndef RECEIVE_DEFAULT_SEGMENT_OPTIONS
+  #define RECEIVE_DEFAULT_SEGMENT_OPTIONS false
+#endif
+#ifndef RECEIVE_DEFAULT_SEGMENT_BOUNDS
+  #define RECEIVE_DEFAULT_SEGMENT_BOUNDS false
+#endif
+#ifndef RECEIVE_DEFAULT_PALETTE
+  #define RECEIVE_DEFAULT_PALETTE true
+#endif
+#define RECEIVE_DEFAULT_OPTIONS ( ((RECEIVE_DEFAULT_BRIGHTNESS      ? (1<<0) : 0) |
+                                  (RECEIVE_DEFAULT_COLOR           ? (1<<1) : 0) |
+                                  (RECEIVE_DEFAULT_EFFECTS         ? (1<<2) : 0) |
+                                  (RECEIVE_DEFAULT_SEGMENT_OPTIONS ? (1<<3) : 0) |
+                                  (RECEIVE_DEFAULT_SEGMENT_BOUNDS  ? (1<<4) : 0) |
+                                  (RECEIVE_DEFAULT_DIRECT          ? (1<<5) : 0) |
+                                  (RECEIVE_DEFAULT_PALETTE         ? (1<<6) : 0))
 #ifndef NOTIFY_DEFAULT_DIRECT
   #define NOTIFY_DEFAULT_DIRECT 1
 #endif
-#define NOTIFY_DEFAULT_OPTIONS ( (0x0F & ~(1<<0)) | ( (NOTIFY_DEFAULT_DIRECT) ? (1<<0) : 0 ) )
+#ifndef NOTIFY_DEFAULT_BUTTON
+  #define NOTIFY_DEFAULT_BUTTON true
+#endif
+#ifndef NOTIFY_DEFAULT_ALEXA
+  #define NOTIFY_DEFAULT_ALEXA false
+#endif
+#ifndef NOTIFY_DEFAULT_HUE
+  #define NOTIFY_DEFAULT_HUE false
+#endif
+#define NOTIFY_DEFAULT_OPTIONS ( ((NOTIFY_DEFAULT_DIRECT ? (1<<0) : 0) |
+                                 (NOTIFY_DEFAULT_BUTTON ? (1<<1) : 0) |
+                                 (NOTIFY_DEFAULT_ALEXA  ? (1<<2) : 0) |
+                                 (NOTIFY_DEFAULT_HUE    ? (1<<3) : 0))
 #ifdef WLED_SAVE_RAM
 // this will save us 8 bytes of RAM while increasing code by ~400 bytes
 typedef class Receive {
@@ -1005,17 +1041,17 @@ WLED_GLOBAL send_notification_t    notifyG  _INIT(NOTIFY_DEFAULT_OPTIONS);
 #define notifyAlexa  notifyG.Alexa
 #define notifyHue    notifyG.Hue
 #else
-WLED_GLOBAL bool receiveNotificationBrightness _INIT(true);       // apply brightness from incoming notifications
-WLED_GLOBAL bool receiveNotificationColor      _INIT(true);       // apply color
-WLED_GLOBAL bool receiveNotificationEffects    _INIT(true);       // apply effects setup
-WLED_GLOBAL bool receiveNotificationPalette    _INIT(true);       // apply palette
-WLED_GLOBAL bool receiveSegmentOptions         _INIT(false);      // apply segment options
-WLED_GLOBAL bool receiveSegmentBounds          _INIT(false);      // apply segment bounds (start, stop, offset)
+WLED_GLOBAL bool receiveNotificationBrightness _INIT(RECEIVE_DEFAULT_BRIGHTNESS);      // apply brightness from incoming notifications
+WLED_GLOBAL bool receiveNotificationColor      _INIT(RECEIVE_DEFAULT_COLOR);           // apply color
+WLED_GLOBAL bool receiveNotificationEffects    _INIT(RECEIVE_DEFAULT_EFFECTS);         // apply effects setup
+WLED_GLOBAL bool receiveNotificationPalette    _INIT(RECEIVE_DEFAULT_PALETTE);         // apply palette
+WLED_GLOBAL bool receiveSegmentOptions         _INIT(RECEIVE_DEFAULT_SEGMENT_OPTIONS); // apply segment options
+WLED_GLOBAL bool receiveSegmentBounds          _INIT(RECEIVE_DEFAULT_SEGMENT_BOUNDS);  // apply segment bounds (start, stop, offset)
 WLED_GLOBAL bool receiveDirect _INIT(RECEIVE_DEFAULT_DIRECT);     // receive UDP/Hyperion realtime
 WLED_GLOBAL bool notifyDirect _INIT(NOTIFY_DEFAULT_DIRECT);       // send notification if change via UI or HTTP API
-WLED_GLOBAL bool notifyButton _INIT(true);                        // send if updated by button or infrared remote
-WLED_GLOBAL bool notifyAlexa  _INIT(false);                       // send notification if updated via Alexa
-WLED_GLOBAL bool notifyHue    _INIT(false);                       // send notification if Hue light changes
+WLED_GLOBAL bool notifyButton _INIT(NOTIFY_DEFAULT_BUTTON);       // send if updated by button or infrared remote
+WLED_GLOBAL bool notifyAlexa  _INIT(NOTIFY_DEFAULT_ALEXA);        // send notification if updated via Alexa
+WLED_GLOBAL bool notifyHue    _INIT(NOTIFY_DEFAULT_HUE);          // send notification if Hue light changes
 #endif
 
 // effects
