@@ -385,12 +385,12 @@
   * loop() is called continuously. Here you can check for events, read sensors, etc.
   */
   void UsermodSSDR::loop() {
-    if (!umSSDRDisplayTime || strip.isUpdating() || umSSDRMask == nullptr) {
+    if (!umSSDRDisplayTime || strip.isUpdating() || umSSDRMask == nullptr || externalLedOutputDisabled) {
       return;
     }
 
     #if defined(USERMOD_SN_PHOTORESISTOR) || defined(USERMOD_BH1750)
-      if(bri != 0 && umSSDREnableLDR && (millis() - umSSDRLastRefresh > umSSDRRefreshTime) && !externalLedOutputDisabled) {
+      if(bri != 0 && umSSDREnableLDR && (millis() - umSSDRLastRefresh > umSSDRRefreshTime)) {
         float lux = -1; // Initialize lux with an invalid value
 	  
         #ifdef USERMOD_SN_PHOTORESISTOR
@@ -412,14 +412,18 @@
           float constrainedLux = constrain(lux, umSSDRLuxMin, umSSDRLuxMax);
 
           // float linear interpolation to preserve full 0–255 resolution
-          float spanLux   = umSSDRLuxMax   - umSSDRLuxMin;
+          float spanLux = umSSDRLuxMax - umSSDRLuxMin;
           float spanBright = umSSDRBrightnessMax - umSSDRBrightnessMin;
-          float ratio = (constrainedLux - umSSDRLuxMin) / spanLux;
-          
-          if (!umSSDRInvertAutoBrightness) {
-            brightness = static_cast<uint16_t>(ratio * spanBright + umSSDRBrightnessMin);
+          if (spanLux <= 0.0f) {
+            _logUsermodSSDR("Invalid lux range (%d..%d). Using min brightness.", umSSDRLuxMin, umSSDRLuxMax);
+            brightness = umSSDRBrightnessMin;
           } else {
-            brightness = static_cast<uint16_t>((1.0f - ratio) * spanBright + umSSDRBrightnessMin);
+            float ratio = (constrainedLux - umSSDRLuxMin) / spanLux;
+            if (!umSSDRInvertAutoBrightness) {
+              brightness = static_cast<uint16_t>(ratio * spanBright + umSSDRBrightnessMin);
+            } else {
+              brightness = static_cast<uint16_t>((1.0f - ratio) * spanBright + umSSDRBrightnessMin);
+            }
           }
           _logUsermodSSDR("Lux=%.2f brightness=%d", lux, brightness);
 
@@ -435,8 +439,24 @@
   }
 
   void UsermodSSDR::handleOverlayDraw() {
-    if (umSSDRDisplayTime && !externalLedOutputDisabled && umSSDRMask != nullptr) {
-      _overlaySevenSegmentDraw();
+    if (umSSDRMask == nullptr) {
+      return;
+    }
+    if (!umSSDRDisplayTime || externalLedOutputDisabled) {
+      _setAllFalse();
+      _setMaskToLeds();
+      return;
+    }
+    _overlaySevenSegmentDraw();
+  }
+
+  void UsermodSSDR::onStateChange(uint8_t mode) {
+    (void)mode;
+    // When disabled, clear our mask so nothing gets drawn
+    if (externalLedOutputDisabled && umSSDRMask != nullptr) {
+      _setAllFalse();
+      _setMaskToLeds();
+      _logUsermodSSDR("Cleared mask due to external disable in onStateChange");
     }
   }
 
