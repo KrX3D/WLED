@@ -274,6 +274,8 @@ private:
   
   void handleSimpleMultiTopicPresence(const String& topics, const char* topic, const char* payload);
   void handleSimpleMultiTopicLux(const String& topics, const char* topic, const char* payload);
+  bool parse3DPrinterEffectPayload(const String& payload, uint8_t& r, uint8_t& g, uint8_t& b,
+                                   uint8_t& w, uint8_t& effectMode, unsigned long& durationMs);
   
   // Helper methods for sensor management
   bool parseJsonConfig(const String& json, SensorConfig& config);
@@ -293,6 +295,7 @@ public:
   
   unsigned long resetScheduledTime = 0;
   const unsigned long RESET_DELAY_MS = 10000UL;
+  unsigned long activeResetDelayMs = 10000UL;
 
   ////////////////// Backup Storage for Segments //////////////////
   BackupHelper<Segment> mainSegmentBackup; // Backup for main segment
