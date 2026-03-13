@@ -53,7 +53,7 @@
 #endif
 
 #ifndef HOUR_EFFECT_TRIGGER_MODE
-  #define HOUR_EFFECT_TRIGGER_MODE 1  // 0=none, 1=presence only, 2=lux only (no turn off), 3=lux only (with turn off), 4=lux and presence (off on presence), 5=lux and presence (off on both)
+  #define HOUR_EFFECT_TRIGGER_MODE 0  // 0=none, 1=presence only, 2=lux only (no turn off), 3=lux only (with turn off), 4=lux and presence (off on presence), 5=lux and presence (off on both)
 #endif
 
 #ifndef HOUR_EFFECT_INPUT_PIN

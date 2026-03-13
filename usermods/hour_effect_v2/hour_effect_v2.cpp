@@ -826,9 +826,9 @@ void UsermodHourEffect::NightNothomeTrigger() {
   
   #ifdef USERMOD_NIXIECLOCK
     if (nixie != nullptr) {
-      _logUsermodHourEffect("[NIGHT-HOME-TRIGGER] Calling setNixiePower(%s) on NixieClock usermod", 
+      _logUsermodHourEffect("[NIGHT-HOME-TRIGGER] Calling setNixieMainPower(%s) on NixieClock usermod", 
                             shouldDisable ? "true" : "false");
-      nixie->setNixiePower(shouldDisable);
+      nixie->setNixieMainPower(shouldDisable);
     } else {
       _logUsermodHourEffect("[NIGHT-HOME-TRIGGER] NixieClock usermod not loaded (nixie is null)");
     }
@@ -3196,7 +3196,7 @@ EXAMPLE 1: Presence with OR logic (any sensor triggers presence)
   "sensors": [
     {
       "id": "kitchen_wave",
-      "topic": "zigbee2mqtt/K�che mWave",
+      "topic": "zigbee2mqtt/Küche mWave",
       "path": "presence",
       "on_values": "on,true,1"
     },
@@ -3254,7 +3254,7 @@ EXAMPLE 4: Blocker with multiple conditions
   "sensors": [
     {
       "id": "manual_switch",
-      "topic": "zigbee2mqtt/K�che Licht",
+      "topic": "zigbee2mqtt/Küche Licht",
       "path": "state_center",
       "on_values": "on,true,1"
     }
