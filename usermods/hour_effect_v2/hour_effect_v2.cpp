@@ -1241,14 +1241,10 @@ bool UsermodHourEffect::parseNotificationEffectPayload(const String& payload, ui
   effectIntensity = (uint8_t) constrain((int)(doc["intensity"] | effectIntensity), 0, 255);
   pal = (uint8_t) constrain((int)(doc["palette"] | pal), 0, 255);
 
-  if (doc.containsKey("device")) {
-    targetDevice = doc["device"].as<String>();
-  } else if (doc.containsKey("target")) {
+  if (doc.containsKey("target")) {
     targetDevice = doc["target"].as<String>();
-  } else if (doc.containsKey("deviceName")) {
-    targetDevice = doc["deviceName"].as<String>();
+    targetDevice.trim();
   }
-  targetDevice.trim();
 
   unsigned long parsedDuration = doc["durationMs"] | doc["duration"] | durationMs;
   durationMs = constrain(parsedDuration, 100UL, 600000UL);
