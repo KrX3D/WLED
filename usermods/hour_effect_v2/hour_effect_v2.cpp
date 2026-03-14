@@ -764,7 +764,6 @@ void UsermodHourEffect::onMqttConnect(bool sessionPresent) {
       }
     }
 
-    activeResetDelayMs = RESET_DELAY_MS;
     resetScheduledTime = millis();
     ResetEffect = true;
     _logUsermodHourEffect("[MQTT-CONNECT] MQTT setup complete, effect reset scheduled for %lu ms from now", RESET_DELAY_MS);
@@ -1063,7 +1062,6 @@ void UsermodHourEffect::loop() {
         applyEffectSettings(255, 255, 255, 255, GotEffect);
 
         // Schedule reset after 10 seconds
-        activeResetDelayMs = RESET_DELAY_MS;
         resetScheduledTime = currentMillis;
         ResetEffect = true;
         _logUsermodHourEffect("[LOOP] Hourly effect applied, reset scheduled for %lu ms", RESET_DELAY_MS);
@@ -1072,7 +1070,7 @@ void UsermodHourEffect::loop() {
   }
 
   // Check if the effect should be reset (after 10 seconds)
-  if (ResetEffect && (currentMillis - resetScheduledTime > activeResetDelayMs)) {
+  if (ResetEffect && (currentMillis - resetScheduledTime > RESET_DELAY_MS)) {
     ResetEffect = false;
     _logUsermodHourEffect("[LOOP] ========== Effect Reset ==========");
     _logUsermodHourEffect("[LOOP] Restoring LED state after effect");
@@ -1199,7 +1197,7 @@ bool UsermodHourEffect::isTopicMatch(const char* topic, const char* suffix) cons
 
 
 bool UsermodHourEffect::parseNotificationEffectPayload(const String& payload, uint8_t& r, uint8_t& g, uint8_t& b,
-                                                     uint8_t& w, uint8_t& effectMode, unsigned long& durationMs, String& targetDevice) {
+                                                     uint8_t& w, uint8_t& effectMode, String& targetDevice) {
   String trimmed = payload;
   trimmed.trim();
 
@@ -1246,11 +1244,8 @@ bool UsermodHourEffect::parseNotificationEffectPayload(const String& payload, ui
     targetDevice.trim();
   }
 
-  unsigned long parsedDuration = doc["durationMs"] | doc["duration"] | durationMs;
-  durationMs = constrain(parsedDuration, 100UL, 600000UL);
-
-  _logUsermodHourEffect("[NOTIFICATION-EFFECT] Parsed payload: rgbw=(%d,%d,%d,%d) effect=%d speed=%d intensity=%d palette=%d duration=%lu target=%s",
-                        r, g, b, w, effectMode, effectSpeed, effectIntensity, pal, durationMs, targetDevice.c_str());
+  _logUsermodHourEffect("[NOTIFICATION-EFFECT] Parsed payload: rgbw=(%d,%d,%d,%d) effect=%d speed=%d intensity=%d palette=%d target=%s",
+                        r, g, b, w, effectMode, effectSpeed, effectIntensity, pal, targetDevice.c_str());
   return true;
 }
 
@@ -1422,10 +1417,9 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
       applyEffectSettings(0, 255, 0, 0, 1);
 
       // Schedule reset after 10 seconds
-      activeResetDelayMs = RESET_DELAY_MS;
       resetScheduledTime = millis();
       ResetEffect = true;
-      _logUsermodHourEffect("[MQTT-MSG] Scheduled effect reset in %lu ms (now=%lu target=%lu)", activeResetDelayMs, millis(), resetScheduledTime);
+      _logUsermodHourEffect("[MQTT-MSG] Scheduled effect reset in %lu ms (now=%lu target=%lu)", RESET_DELAY_MS, millis(), resetScheduledTime);
 
       publishMessage("3dPrinterFinshed", String("3D Druck fertig um: ") + timestamp);
       _logUsermodHourEffect("[MQTT-MSG] 3D printer effect applied, reset scheduled");
@@ -1451,10 +1445,9 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
     uint8_t b = 0;
     uint8_t w = 0;
     uint8_t effectMode = 1;
-    unsigned long durationMs = RESET_DELAY_MS;
     String targetDevice = "ALL";
 
-    if (!parseNotificationEffectPayload(payloadString, r, g, b, w, effectMode, durationMs, targetDevice)) {
+    if (!parseNotificationEffectPayload(payloadString, r, g, b, w, effectMode, targetDevice)) {
       _logUsermodHourEffect("[MQTT-MSG] Notification payload ignored (invalid)");
       return true;
     }
@@ -1473,10 +1466,9 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
     _BackupCurrentLedState();
     applyEffectSettings(r, g, b, w, effectMode);
 
-    activeResetDelayMs = durationMs;
     resetScheduledTime = millis();
     ResetEffect = true;
-    _logUsermodHourEffect("[MQTT-MSG] Notification effect reset in %lu ms (now=%lu target=%lu)", activeResetDelayMs, millis(), resetScheduledTime);
+    _logUsermodHourEffect("[MQTT-MSG] Notification effect reset in %lu ms (now=%lu target=%lu)", RESET_DELAY_MS, millis(), resetScheduledTime);
 
     publishMessage("NotificationEffect", String("Notification effect at: ") + timestamp);
     return true;
