@@ -1241,12 +1241,16 @@ bool UsermodHourEffect::parseNotificationEffectPayload(const String& payload, ui
   effectIntensity = (uint8_t) constrain((int)(doc["intensity"] | effectIntensity), 0, 255);
   pal = (uint8_t) constrain((int)(doc["palette"] | pal), 0, 255);
 
-  if (doc.containsKey("target")) {
-    targetDevice = doc["target"].as<String>();
-  } else if (doc.containsKey("device")) {
-    targetDevice = doc["device"].as<String>();
+  if (!doc.containsKey("target")) {
+    _logUsermodHourEffect("[NOTIFICATION-EFFECT] Missing required 'target' field");
+    return false;
   }
+  targetDevice = doc["target"].as<String>();
   targetDevice.trim();
+  if (!targetDevice.length()) {
+    _logUsermodHourEffect("[NOTIFICATION-EFFECT] Empty 'target' field");
+    return false;
+  }
 
   unsigned long parsedDuration = doc["durationMs"] | doc["duration"] | durationMs;
   durationMs = constrain(parsedDuration, 100UL, 600000UL);
@@ -1257,8 +1261,6 @@ bool UsermodHourEffect::parseNotificationEffectPayload(const String& payload, ui
 }
 
 bool UsermodHourEffect::matchesNotificationTarget(const String& targetDevice) const {
-  if (!targetDevice.length()) return true;
-
   String target = targetDevice;
   target.trim();
   target.toUpperCase();
@@ -1269,11 +1271,7 @@ bool UsermodHourEffect::matchesNotificationTarget(const String& targetDevice) co
   thisDeviceName.trim();
   thisDeviceName.toUpperCase();
 
-  String thisDeviceTopic = String(mqttDeviceTopic);
-  thisDeviceTopic.trim();
-  thisDeviceTopic.toUpperCase();
-
-  return (target == thisDeviceName) || (target == thisDeviceTopic);
+  return (target == thisDeviceName);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1454,7 +1452,7 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
     uint8_t w = 0;
     uint8_t effectMode = 1;
     unsigned long durationMs = RESET_DELAY_MS;
-    String targetDevice = "ALL";
+    String targetDevice = "";
 
     if (!parseNotificationEffectPayload(payloadString, r, g, b, w, effectMode, durationMs, targetDevice)) {
       _logUsermodHourEffect("[MQTT-MSG] Notification payload ignored (invalid)");
