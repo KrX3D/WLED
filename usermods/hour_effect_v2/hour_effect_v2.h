@@ -165,6 +165,7 @@ private:
   ////////////////// Enable Flags //////////////////
   bool enabledUsermod       = HOUR_EFFECT_ENABLED_USERMOD; // Global on/off for this usermod
   bool enabled3DBlink       = HOUR_EFFECT_ENABLED_3D_BLINK; // Enable 3D printer finished blink effect
+  bool enabledNotificationEffect = false; // Enable MQTT notification effect trigger
   bool enabledHourEffect    = HOUR_EFFECT_ENABLED_HOUR_EFFECT; // Enable hourly effect
   bool enableNightModePowerOff  = HOUR_EFFECT_ENABLE_NIGHT_MODE_POWER_OFF; // If true, power off LEDs when NightMode starts
   bool enabledNightModePowerOn  = HOUR_EFFECT_ENABLED_NIGHT_MODE_POWER_ON; // If true, power on LEDs when NightMode ends
@@ -231,6 +232,7 @@ private:
   static const char _name[];
   static const char _enabledUsermod[];
   static const char _enabled3DBlink[];
+  static const char _enabledNotificationEffect[];
   static const char _enabledHourEffect[];
   static const char _enableNightModePowerOff[];
   static const char _enabledNightModePowerOn[];
@@ -274,6 +276,9 @@ private:
   
   void handleSimpleMultiTopicPresence(const String& topics, const char* topic, const char* payload);
   void handleSimpleMultiTopicLux(const String& topics, const char* topic, const char* payload);
+  bool parseNotificationEffectPayload(const String& payload, uint8_t& r, uint8_t& g, uint8_t& b,
+                                      uint8_t& w, uint8_t& effectMode, unsigned long& durationMs, String& targetDevice);
+  bool matchesNotificationTarget(const String& targetDevice) const;
   
   // Helper methods for sensor management
   bool parseJsonConfig(const String& json, SensorConfig& config);
@@ -293,6 +298,7 @@ public:
   
   unsigned long resetScheduledTime = 0;
   const unsigned long RESET_DELAY_MS = 10000UL;
+  unsigned long activeResetDelayMs = 10000UL;
 
   ////////////////// Backup Storage for Segments //////////////////
   BackupHelper<Segment> mainSegmentBackup; // Backup for main segment

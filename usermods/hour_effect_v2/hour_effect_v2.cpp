@@ -702,8 +702,8 @@ void UsermodHourEffect::onMqttConnect(bool sessionPresent) {
   //}
   if (mqttGroupTopic[0]) {
     // Subscribe to group topics for NightMode, NotHome, NewEffect, and 3D printer finished.
-    _logUsermodHourEffect("[MQTT-CONNECT] Subscribing to mode topics (NightMode, NotHome, NewEffect, 3dPrinterFinshed)");
-    const char* topics[] = {"NightMode", "NotHome", "NewEffect", "3dPrinterFinshed"};
+    _logUsermodHourEffect("[MQTT-CONNECT] Subscribing to mode topics (NightMode, NotHome, NewEffect, 3dPrinterFinshed, NotificationEffect)");
+    const char* topics[] = {"NightMode", "NotHome", "NewEffect", "3dPrinterFinshed", "NotificationEffect"};
 
     for (auto topic : topics) {
       sprintf_P(subBuffer, PSTR("%s/%s"), mqttGroupTopic, topic);
@@ -764,6 +764,7 @@ void UsermodHourEffect::onMqttConnect(bool sessionPresent) {
       }
     }
 
+    activeResetDelayMs = RESET_DELAY_MS;
     resetScheduledTime = millis();
     ResetEffect = true;
     _logUsermodHourEffect("[MQTT-CONNECT] MQTT setup complete, effect reset scheduled for %lu ms from now", RESET_DELAY_MS);
@@ -1062,6 +1063,7 @@ void UsermodHourEffect::loop() {
         applyEffectSettings(255, 255, 255, 255, GotEffect);
 
         // Schedule reset after 10 seconds
+        activeResetDelayMs = RESET_DELAY_MS;
         resetScheduledTime = currentMillis;
         ResetEffect = true;
         _logUsermodHourEffect("[LOOP] Hourly effect applied, reset scheduled for %lu ms", RESET_DELAY_MS);
@@ -1070,7 +1072,7 @@ void UsermodHourEffect::loop() {
   }
 
   // Check if the effect should be reset (after 10 seconds)
-  if (ResetEffect && (currentMillis - resetScheduledTime > RESET_DELAY_MS)) {
+  if (ResetEffect && (currentMillis - resetScheduledTime > activeResetDelayMs)) {
     ResetEffect = false;
     _logUsermodHourEffect("[LOOP] ========== Effect Reset ==========");
     _logUsermodHourEffect("[LOOP] Restoring LED state after effect");
@@ -1193,6 +1195,83 @@ bool UsermodHourEffect::isTopicMatch(const char* topic, const char* suffix) cons
     _logUsermodHourEffect("[TOPIC-MATCH] Suffix match: '%s' ends with '%s'", topic, suffix);
   }
   return endsWith;
+}
+
+
+bool UsermodHourEffect::parseNotificationEffectPayload(const String& payload, uint8_t& r, uint8_t& g, uint8_t& b,
+                                                     uint8_t& w, uint8_t& effectMode, unsigned long& durationMs, String& targetDevice) {
+  String trimmed = payload;
+  trimmed.trim();
+
+  if (!trimmed.length()) return false;
+
+  if (trimmed[0] != '{') {
+    _logUsermodHourEffect("[NOTIFICATION-EFFECT] Unsupported payload format: %s", payload.c_str());
+    return false;
+  }
+
+  DynamicJsonDocument doc(512);
+  DeserializationError error = deserializeJson(doc, trimmed);
+  if (error) {
+    _logUsermodHourEffect("[NOTIFICATION-EFFECT] JSON parsing error: %s", error.c_str());
+    return false;
+  }
+
+  bool active = true;
+  if (doc.containsKey("active")) {
+    active = doc["active"].as<bool>();
+  } else if (doc.containsKey("trigger")) {
+    active = doc["trigger"].as<bool>();
+  } else if (doc.containsKey("state")) {
+    active = doc["state"].as<bool>();
+  }
+
+  if (!active) {
+    _logUsermodHourEffect("[NOTIFICATION-EFFECT] Payload active=false, ignoring trigger");
+    return false;
+  }
+
+  r = (uint8_t) constrain((int)(doc["r"] | doc["red"] | r), 0, 255);
+  g = (uint8_t) constrain((int)(doc["g"] | doc["green"] | g), 0, 255);
+  b = (uint8_t) constrain((int)(doc["b"] | doc["blue"] | b), 0, 255);
+  w = (uint8_t) constrain((int)(doc["w"] | doc["white"] | w), 0, 255);
+
+  effectMode = (uint8_t) constrain((int)(doc["effect"] | doc["mode"] | effectMode), 0, 255);
+  effectSpeed = (uint8_t) constrain((int)(doc["speed"] | effectSpeed), 0, 255);
+  effectIntensity = (uint8_t) constrain((int)(doc["intensity"] | effectIntensity), 0, 255);
+  pal = (uint8_t) constrain((int)(doc["palette"] | pal), 0, 255);
+
+  if (!doc.containsKey("target")) {
+    _logUsermodHourEffect("[NOTIFICATION-EFFECT] Missing required 'target' field");
+    return false;
+  }
+  targetDevice = doc["target"].as<String>();
+  targetDevice.trim();
+  if (!targetDevice.length()) {
+    _logUsermodHourEffect("[NOTIFICATION-EFFECT] Empty 'target' field");
+    return false;
+  }
+
+  unsigned long parsedDuration = doc["durationMs"] | doc["duration"] | durationMs;
+  durationMs = constrain(parsedDuration, 100UL, 600000UL);
+
+  _logUsermodHourEffect("[NOTIFICATION-EFFECT] Parsed payload: rgbw=(%d,%d,%d,%d) effect=%d speed=%d intensity=%d palette=%d duration=%lu target=%s",
+                        r, g, b, w, effectMode, effectSpeed, effectIntensity, pal, durationMs, targetDevice.c_str());
+  return true;
+}
+
+bool UsermodHourEffect::matchesNotificationTarget(const String& targetDevice) const {
+  String target = targetDevice;
+  target.trim();
+  target.toUpperCase();
+
+  if (target == "ALL") return true;
+
+  String thisDeviceName = String(serverDescription);
+  thisDeviceName.trim();
+  thisDeviceName.toUpperCase();
+
+  return (target == thisDeviceName);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1321,7 +1400,6 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
 
     // If an effect is already running/being reset, ignore duplicates.
     // Also ignore repeated messages that come in within MIN_3D_TRIGGER_MS ms (debounce).
-    //if (BlockTriggers) {
     if (BlockTriggers || ResetEffect || (now - last3DTriggerTime < MIN_3D_TRIGGER_MS)) {
       _logUsermodHourEffect("[MQTT-MSG] Ignoring duplicate/late 3dPrinter trigger (BlockTriggers=%d ResetEffect=%d dt=%lu)",
                           BlockTriggers, ResetEffect, now - last3DTriggerTime);
@@ -1344,13 +1422,63 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
       applyEffectSettings(0, 255, 0, 0, 1);
 
       // Schedule reset after 10 seconds
+      activeResetDelayMs = RESET_DELAY_MS;
       resetScheduledTime = millis();
       ResetEffect = true;
-	  _logUsermodHourEffect("[MQTT-MSG] Scheduled effect reset in %lu ms (now=%lu target=%lu)", RESET_DELAY_MS, millis(), resetScheduledTime);
+      _logUsermodHourEffect("[MQTT-MSG] Scheduled effect reset in %lu ms (now=%lu target=%lu)", activeResetDelayMs, millis(), resetScheduledTime);
 
       publishMessage("3dPrinterFinshed", String("3D Druck fertig um: ") + timestamp);
       _logUsermodHourEffect("[MQTT-MSG] 3D printer effect applied, reset scheduled");
     }
+    return true;
+  }
+
+  if (isTopicMatch(topic, "/NotificationEffect") && enabledNotificationEffect && !NotHome && !NightMode) {
+    _logUsermodHourEffect("[MQTT-MSG] Processing /NotificationEffect");
+
+    unsigned long now = millis();
+    if (BlockTriggers || ResetEffect || (now - last3DTriggerTime < MIN_3D_TRIGGER_MS)) {
+      _logUsermodHourEffect("[MQTT-MSG] Ignoring duplicate/late notification trigger (BlockTriggers=%d ResetEffect=%d dt=%lu)",
+                          BlockTriggers, ResetEffect, now - last3DTriggerTime);
+      last3DTriggerTime = now;
+      return true;
+    }
+
+    last3DTriggerTime = now;
+
+    uint8_t r = 0;
+    uint8_t g = 255;
+    uint8_t b = 0;
+    uint8_t w = 0;
+    uint8_t effectMode = 1;
+    unsigned long durationMs = RESET_DELAY_MS;
+    String targetDevice = "";
+
+    if (!parseNotificationEffectPayload(payloadString, r, g, b, w, effectMode, durationMs, targetDevice)) {
+      _logUsermodHourEffect("[MQTT-MSG] Notification payload ignored (invalid)");
+      return true;
+    }
+
+    if (!matchesNotificationTarget(targetDevice)) {
+      _logUsermodHourEffect("[MQTT-MSG] Notification target '%s' does not match this device '%s'",
+                            targetDevice.c_str(), serverDescription);
+      return true;
+    }
+
+    BlockTriggers = true;
+    _logUsermodHourEffect("[MQTT-MSG] Notification effect activated, ALL triggers blocked");
+
+    delay(50);
+
+    _BackupCurrentLedState();
+    applyEffectSettings(r, g, b, w, effectMode);
+
+    activeResetDelayMs = durationMs;
+    resetScheduledTime = millis();
+    ResetEffect = true;
+    _logUsermodHourEffect("[MQTT-MSG] Notification effect reset in %lu ms (now=%lu target=%lu)", activeResetDelayMs, millis(), resetScheduledTime);
+
+    publishMessage("NotificationEffect", String("Notification effect at: ") + timestamp);
     return true;
   }
 
@@ -2120,6 +2248,7 @@ void UsermodHourEffect::addToConfig(JsonObject& root) {
   JsonObject top = root.createNestedObject(FPSTR(_name));
   top[FPSTR(_enabledUsermod)]                 = enabledUsermod;
   top[FPSTR(_enabled3DBlink)]                 = enabled3DBlink;
+  top[FPSTR(_enabledNotificationEffect)]       = enabledNotificationEffect;
   top[FPSTR(_enabledHourEffect)]              = enabledHourEffect;
   top[FPSTR(_enableNightModePowerOff)]        = enableNightModePowerOff;
   top[FPSTR(_enabledNightModePowerOn)]        = enabledNightModePowerOn;
@@ -2239,6 +2368,7 @@ bool UsermodHourEffect::readFromConfig(JsonObject& root) {
   
   configComplete &= getJsonValue(top[FPSTR(_enabledUsermod)], enabledUsermod);
   configComplete &= getJsonValue(top[FPSTR(_enabled3DBlink)], enabled3DBlink);
+  configComplete &= getJsonValue(top[FPSTR(_enabledNotificationEffect)], enabledNotificationEffect);
   configComplete &= getJsonValue(top[FPSTR(_enabledHourEffect)], enabledHourEffect);
   configComplete &= getJsonValue(top[FPSTR(_enableNightModePowerOff)], enableNightModePowerOff);
   configComplete &= getJsonValue(top[FPSTR(_enabledNightModePowerOn)], enabledNightModePowerOn);
@@ -2943,9 +3073,14 @@ void UsermodHourEffect::appendConfigData() {
 
 		  "const g2=createGroup('Effect Settings');"
 		  "const blink=f('3d finished blink');"
+		  "const notif=f('Notification MQTT Effect');"
 		  "const hour=f('Effect every Hour');"
 		  "if(blink){"
 			"const row=createRow(blink,'3D Printer Finished Blink');"
+			"if(row)g2.appendChild(row);"
+		  "}"
+		  "if(notif){"
+			"const row=createRow(notif,'Notification MQTT Effect');"
 			"if(row)g2.appendChild(row);"
 		  "}"
 		  "if(hour){"
@@ -3163,6 +3298,7 @@ uint16_t UsermodHourEffect::getId() {
 const char UsermodHourEffect::_name[]                      PROGMEM = "KrX_MQTT_Commander";
 const char UsermodHourEffect::_enabledUsermod[]            PROGMEM = "Enable Usermod";
 const char UsermodHourEffect::_enabled3DBlink[]            PROGMEM = "3d finished blink";
+const char UsermodHourEffect::_enabledNotificationEffect[]  PROGMEM = "Notification MQTT Effect";
 const char UsermodHourEffect::_enabledHourEffect[]         PROGMEM = "Effect every Hour";
 const char UsermodHourEffect::_enableNightModePowerOff[]   PROGMEM = "Enable Power off when NightMode starts";
 const char UsermodHourEffect::_enabledNightModePowerOn[]   PROGMEM = "Enable Power on when NightMode finished";
