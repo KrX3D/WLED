@@ -161,6 +161,13 @@ private:
   int lastEffectTriggerHour = -1;    // which hour we last fired on
   int lastNightModeOnHour = -1;      // which hour we last turned NightMode ON
   int lastNightModeOffHour = -1;     // which hour we last turned NightMode OFF
+
+  ////////////////// NTP sanity check //////////////////
+  time_t lastKnownGoodTime = 0;
+  unsigned long lastKnownGoodMillis = 0;
+  unsigned long lastTimeSanityCheck = 0;
+  static constexpr unsigned long TIME_SANITY_CHECK_INTERVAL_MS = 120000UL; // 2 min
+  static constexpr long MAX_ALLOWED_TIME_DRIFT_SEC = 300; // 5 min tolerance
   
   ////////////////// Enable Flags //////////////////
   bool enabledUsermod       = HOUR_EFFECT_ENABLED_USERMOD; // Global on/off for this usermod
@@ -273,6 +280,11 @@ private:
   void deallocateInputPin();
   void checkInputPin();
   void controlMqttLamps(bool state);
+
+  bool isReasonableTimestamp(time_t t);
+  bool isCurrentTimeSane();
+  void storeKnownGoodTime(time_t t);
+  bool checkTimeSanity();
   
   void handleSimpleMultiTopicPresence(const String& topics, const char* topic, const char* payload);
   void handleSimpleMultiTopicLux(const String& topics, const char* topic, const char* payload);

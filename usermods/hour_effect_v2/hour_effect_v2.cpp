@@ -680,6 +680,91 @@ void UsermodHourEffect::checkInputPin() {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// NTP / time sanity helpers
+///////////////////////////////////////////////////////////////////////////////
+bool UsermodHourEffect::isReasonableTimestamp(time_t t) {
+  if (t <= 0) return false;
+
+  int y = year(t);
+  if (y < 2024 || y > 2099) return false;
+
+  int mo = month(t);
+  int d  = day(t);
+  int h  = hour(t);
+  int mi = minute(t);
+  int s  = second(t);
+
+  if (mo < 1 || mo > 12) return false;
+  if (d < 1 || d > 31) return false;
+  if (h < 0 || h > 23) return false;
+  if (mi < 0 || mi > 59) return false;
+  if (s < 0 || s > 59) return false;
+
+  return true;
+}
+
+void UsermodHourEffect::storeKnownGoodTime(time_t t) {
+  lastKnownGoodTime = t;
+  lastKnownGoodMillis = millis();
+}
+
+bool UsermodHourEffect::isCurrentTimeSane() {
+  if (!isReasonableTimestamp(localTime)) {
+    _logUsermodHourEffect("[TIME-SANITY] localTime not reasonable");
+    return false;
+  }
+
+  // First valid time after boot: accept it as baseline
+  if (lastKnownGoodTime == 0) {
+    _logUsermodHourEffect("[TIME-SANITY] No baseline yet, accepting first valid localTime");
+    return true;
+  }
+
+  unsigned long elapsedMs = millis() - lastKnownGoodMillis;
+  time_t expectedTime = lastKnownGoodTime + (elapsedMs / 1000UL);
+
+  long diff = (long)(localTime - expectedTime);
+  if (diff < 0) diff = -diff;
+
+  if (diff > MAX_ALLOWED_TIME_DRIFT_SEC) {
+    _logUsermodHourEffect(
+      "[TIME-SANITY] BAD TIME detected: current=%04d-%02d-%02d %02d:%02d:%02d expected~=%04d-%02d-%02d %02d:%02d:%02d diff=%ld sec",
+      year(localTime), month(localTime), day(localTime), hour(localTime), minute(localTime), second(localTime),
+      year(expectedTime), month(expectedTime), day(expectedTime), hour(expectedTime), minute(expectedTime), second(expectedTime),
+      diff
+    );
+    return false;
+  }
+
+  return true;
+}
+
+bool UsermodHourEffect::checkTimeSanity() {
+  unsigned long nowMs = millis();
+
+  if (nowMs - lastTimeSanityCheck < TIME_SANITY_CHECK_INTERVAL_MS) {
+    return true; // no check due yet
+  }
+  lastTimeSanityCheck = nowMs;
+
+  if (!isCurrentTimeSane()) {
+    _logUsermodHourEffect("[TIME-SANITY] Forcing NTP re-sync");
+    ntpLastSyncTime = NTP_NEVER; // Force a new NTP query.
+    return false; // IMPORTANT: do not store bad time
+  }
+
+  storeKnownGoodTime(localTime);
+
+  _logUsermodHourEffect(
+    "[TIME-SANITY] Time OK: %04d-%02d-%02d %02d:%02d:%02d",
+    year(localTime), month(localTime), day(localTime),
+    hour(localTime), minute(localTime), second(localTime)
+  );
+
+  return true;
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // onMqttConnect: Called when MQTT connects. Subscribes to required topics.
 ///////////////////////////////////////////////////////////////////////////////
 void UsermodHourEffect::onMqttConnect(bool sessionPresent) {
@@ -962,6 +1047,16 @@ void UsermodHourEffect::setup() {
   // Allocate input pin if configured
   allocateInputPin();
 
+  // Initialize time sanity baseline only if current time already looks valid
+  if (isReasonableTimestamp(localTime)) {
+    storeKnownGoodTime(localTime);
+    _logUsermodHourEffect("[SETUP] Initial known-good time stored: %04d-%02d-%02d %02d:%02d:%02d",
+                          year(localTime), month(localTime), day(localTime),
+                          hour(localTime), minute(localTime), second(localTime));
+  } else {
+    _logUsermodHourEffect("[SETUP] localTime not valid yet, waiting for later sanity baseline");
+  }
+
   // Dynamically allocate backup storage for each segment.
   uint8_t numSegments = strip.getMaxSegments();
   if (segmentBackup != nullptr) {
@@ -1026,47 +1121,54 @@ void UsermodHourEffect::loop() {
   // Check input pin for presence detection
   checkInputPin();
 
-  // Execute NightMode logic based on the current time
-  executeNightModeLogic();
+  // Check time sanity periodically. If invalid, force NTP re-sync and skip
+  // time-based actions for this loop cycle.
+  bool timeValid = checkTimeSanity();
+  if (!timeValid) {
+    _logUsermodHourEffect("[LOOP] Time invalid this cycle, skipping time-based logic");
+  } else {
+    // Execute NightMode logic based on the current time
+    executeNightModeLogic();
 
-  // Determine if it is time to trigger an hourly effect
-  bool isEffectTime = (currentMillis - lastTime > 1000 &&
-                       minute(localTime) == 0 && second(localTime) == 0);
+    // Determine if it is time to trigger an hourly effect
+    bool isEffectTime = (currentMillis - lastTime > 1000 &&
+                         minute(localTime) == 0 && second(localTime) == 0);
 
-  if (isEffectTime && !NightMode && !NotHome && enabledHourEffect && hour(localTime) != lastEffectTriggerHour) {
-    // Check if we should run the hourly effect based on trigger mode
-    bool shouldRunEffect = (triggerMode == 0) || (bri > 0);
+    if (isEffectTime && !NightMode && !NotHome && enabledHourEffect && hour(localTime) != lastEffectTriggerHour) {
+      // Check if we should run the hourly effect based on trigger mode
+      bool shouldRunEffect = (triggerMode == 0) || (bri > 0);
 
-    if (!shouldRunEffect) {
-      lastEffectTriggerHour = hour(localTime); // Mark as processed
-      _logUsermodHourEffect("[LOOP] Skipping hourly effect at %02d:00:00 - trigger mode %d active and LEDs are OFF (bri=%d)", 
-                           hour(localTime), triggerMode, bri);
-    } else {
-      // CRITICAL FIX: Check if we're already in effect mode
-      if (BlockTriggers) {
-        _logUsermodHourEffect("[LOOP] Effect already running (BlockTriggers=true), skipping hourly trigger");
-        lastEffectTriggerHour = hour(localTime); // Mark as processed to prevent retry
+      if (!shouldRunEffect) {
+        lastEffectTriggerHour = hour(localTime); // Mark as processed
+        _logUsermodHourEffect("[LOOP] Skipping hourly effect at %02d:00:00 - trigger mode %d active and LEDs are OFF (bri=%d)", 
+                             hour(localTime), triggerMode, bri);
       } else {
-        lastEffectTriggerHour = hour(localTime);
+        // CRITICAL FIX: Check if we're already in effect mode
+        if (BlockTriggers) {
+          _logUsermodHourEffect("[LOOP] Effect already running (BlockTriggers=true), skipping hourly trigger");
+          lastEffectTriggerHour = hour(localTime); // Mark as processed to prevent retry
+        } else {
+          lastEffectTriggerHour = hour(localTime);
 
-        BlockTriggers = true;  // Block presence/lux triggers during effect
-        _logUsermodHourEffect("[LOOP] ========== Hourly Effect Trigger ==========");
-        _logUsermodHourEffect("[LOOP] ALL triggers blocked for effect");
-        lastTime = currentMillis;
+          BlockTriggers = true;  // Block presence/lux triggers during effect
+          _logUsermodHourEffect("[LOOP] ========== Hourly Effect Trigger ==========");
+          _logUsermodHourEffect("[LOOP] ALL triggers blocked for effect");
+          lastTime = currentMillis;
 
-        // Small delay to ensure block is processed
-        delay(50);
+          // Small delay to ensure block is processed
+          delay(50);
 
-        _BackupCurrentLedState();
+          _BackupCurrentLedState();
 
-        // Apply the effect settings
-        applyEffectSettings(255, 255, 255, 255, GotEffect);
+          // Apply the effect settings
+          applyEffectSettings(255, 255, 255, 255, GotEffect);
 
-        // Schedule reset after 10 seconds
-        activeResetDelayMs = RESET_DELAY_MS;
-        resetScheduledTime = currentMillis;
-        ResetEffect = true;
-        _logUsermodHourEffect("[LOOP] Hourly effect applied, reset scheduled for %lu ms", RESET_DELAY_MS);
+          // Schedule reset after 10 seconds
+          activeResetDelayMs = RESET_DELAY_MS;
+          resetScheduledTime = currentMillis;
+          ResetEffect = true;
+          _logUsermodHourEffect("[LOOP] Hourly effect applied, reset scheduled for %lu ms", RESET_DELAY_MS);
+        }
       }
     }
   }
@@ -1196,7 +1298,6 @@ bool UsermodHourEffect::isTopicMatch(const char* topic, const char* suffix) cons
   }
   return endsWith;
 }
-
 
 bool UsermodHourEffect::parseNotificationEffectPayload(const String& payload, uint8_t& r, uint8_t& g, uint8_t& b,
                                                      uint8_t& w, uint8_t& effectMode, unsigned long& durationMs, String& targetDevice) {
@@ -1400,6 +1501,7 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
 
     // If an effect is already running/being reset, ignore duplicates.
     // Also ignore repeated messages that come in within MIN_3D_TRIGGER_MS ms (debounce).
+    //if (BlockTriggers) {
     if (BlockTriggers || ResetEffect || (now - last3DTriggerTime < MIN_3D_TRIGGER_MS)) {
       _logUsermodHourEffect("[MQTT-MSG] Ignoring duplicate/late 3dPrinter trigger (BlockTriggers=%d ResetEffect=%d dt=%lu)",
                           BlockTriggers, ResetEffect, now - last3DTriggerTime);
@@ -2248,7 +2350,7 @@ void UsermodHourEffect::addToConfig(JsonObject& root) {
   JsonObject top = root.createNestedObject(FPSTR(_name));
   top[FPSTR(_enabledUsermod)]                 = enabledUsermod;
   top[FPSTR(_enabled3DBlink)]                 = enabled3DBlink;
-  top[FPSTR(_enabledNotificationEffect)]       = enabledNotificationEffect;
+  top[FPSTR(_enabledNotificationEffect)]      = enabledNotificationEffect;
   top[FPSTR(_enabledHourEffect)]              = enabledHourEffect;
   top[FPSTR(_enableNightModePowerOff)]        = enableNightModePowerOff;
   top[FPSTR(_enabledNightModePowerOn)]        = enabledNightModePowerOn;
@@ -2343,15 +2445,15 @@ void UsermodHourEffect::addToConfig(JsonObject& root) {
     top[FPSTR(_MqttLux)] = MqttLux;
   }
   
-  top[FPSTR(_luxThreshold)]                   = luxThreshold;
-  top[FPSTR(_triggerMode)]                    = triggerMode;
+  top[FPSTR(_luxThreshold)] = luxThreshold;
+  top[FPSTR(_triggerMode)]  = triggerMode;
   
   // Store inputPin as array for WLED's automatic pin dropdown
   JsonArray pinArray = top.createNestedArray(FPSTR(_inputPin));
   pinArray.add(inputPin[0]);
   
-  top[FPSTR(_inputActiveLow)]                 = inputActiveLow;
-  top[FPSTR(_MqttLamps)]                      = MqttLamps;
+  top[FPSTR(_inputActiveLow)] = inputActiveLow;
+  top[FPSTR(_MqttLamps)]      = MqttLamps;
   
   _logUsermodHourEffect("[CONFIG-SAVE] Config save completed");
 }
@@ -2415,6 +2517,7 @@ bool UsermodHourEffect::readFromConfig(JsonObject& root) {
       if (c == 13) crCount++;
       if (c == 10) lfCount++;
       if (c == 9) tabCount++;
+      if (c == '\"') quoteCount++;
       if (c == '"') quoteCount++;
     }
     _logUsermodHourEffect("[CONFIG-LOAD] Found: CR=%d, LF=%d, TAB=%d, quotes=%d", crCount, lfCount, tabCount, quoteCount);
@@ -3298,7 +3401,7 @@ uint16_t UsermodHourEffect::getId() {
 const char UsermodHourEffect::_name[]                      PROGMEM = "KrX_MQTT_Commander";
 const char UsermodHourEffect::_enabledUsermod[]            PROGMEM = "Enable Usermod";
 const char UsermodHourEffect::_enabled3DBlink[]            PROGMEM = "3d finished blink";
-const char UsermodHourEffect::_enabledNotificationEffect[]  PROGMEM = "Notification MQTT Effect";
+const char UsermodHourEffect::_enabledNotificationEffect[] PROGMEM = "Notification MQTT Effect";
 const char UsermodHourEffect::_enabledHourEffect[]         PROGMEM = "Effect every Hour";
 const char UsermodHourEffect::_enableNightModePowerOff[]   PROGMEM = "Enable Power off when NightMode starts";
 const char UsermodHourEffect::_enabledNightModePowerOn[]   PROGMEM = "Enable Power on when NightMode finished";
@@ -3308,9 +3411,9 @@ const char UsermodHourEffect::_NightModeOff[]              PROGMEM = "NightMode 
 const char UsermodHourEffect::_MqttPresence[]              PROGMEM = "Mqtt Presence Path";
 const char UsermodHourEffect::_MqttPresenceBlocker[]       PROGMEM = "Block Presence On/Off";
 const char UsermodHourEffect::_MqttLux[]                   PROGMEM = "Mqtt Lux/Illuminance Path";
-const char UsermodHourEffect::_MqttPresenceAdvanced[]	   PROGMEM = "MQTT Presence JSON Config";
-const char UsermodHourEffect::_MqttLuxAdvanced[]      	   PROGMEM = "MQTT Lux JSON Config";
-const char UsermodHourEffect::_MqttBlockerAdvanced[]  	   PROGMEM = "MQTT Blocker JSON Config";
+const char UsermodHourEffect::_MqttPresenceAdvanced[]      PROGMEM = "MQTT Presence JSON Config";
+const char UsermodHourEffect::_MqttLuxAdvanced[]           PROGMEM = "MQTT Lux JSON Config";
+const char UsermodHourEffect::_MqttBlockerAdvanced[]       PROGMEM = "MQTT Blocker JSON Config";
 const char UsermodHourEffect::_luxThreshold[]              PROGMEM = "Lux Threshold";
 const char UsermodHourEffect::_triggerMode[]               PROGMEM = "Trigger Mode";
 const char UsermodHourEffect::_inputPin[]                  PROGMEM = "sensor_pin";
