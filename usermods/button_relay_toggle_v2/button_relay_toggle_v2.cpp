@@ -302,7 +302,7 @@ class UsermodButtonRelayToggle : public Usermod {
 
           // On a released (short) press -> toggle relay (matches original behavior)
           #ifndef WLED_DISABLE_MQTT
-          publishMqtt("Button", index + 1, true); // publish RELEASED as original code did (state=false)
+          publishMqtt("Button", index + 1, false); // false = RELEASED (toggle fires on release)
           #endif
           toggleRelay(index);
           _lastToggleTime[index] = now;
