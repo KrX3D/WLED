@@ -48,7 +48,6 @@ private:
     bool dotsEnabled = false;
     bool lastSpiState = false;        // Track SPI state to detect failures
     unsigned long lastStateCheck = 0; // Track when we last checked states
-    bool externalControlActive = false; // Set by setNixieMainPower(); prevents verifyAndFixState/onStateChange from overriding it
 
     // Member variables for non-blocking anti-poisoning
     bool antiPoisoningInProgress = false;
@@ -103,21 +102,19 @@ public:
 	//=====================================================================
 	// Can be used outside of this usermod to control the main power state.
 	// For compatibility with other usermods, "true" disables the nixie clock.
+	// External API for other usermods (e.g. hour_effect_v2).
+	// state=true  → disable tubes (blank display).
+	// state=false → re-enable tubes.
+	// mainState is the only gate; bri > 0 is checked separately in the main loop,
+	// so this does not interact with WLED brightness at all.
 	void setNixieMainPower(bool state) {
 		bool enabled = !state;
-		externalControlActive = !enabled; // track whether an external caller has disabled the clock
-		if (mainState == enabled) {
-			return;
-		}
+		if (mainState == enabled) return;
 
 		mainState = enabled;
+		if (!enabled) powerOffNixieTubes();
 
-		if (!enabled) {
-			// If power for Nixie tubes is off, clear the display.
-			powerOffNixieTubes();
-		}
-
-		_logUsermodNixieClock("Nixie main power set to: %s (externalControl=%s)", enabled ? "ON" : "OFF", externalControlActive ? "active" : "inactive");
+		_logUsermodNixieClock("Nixie main power set to: %s", enabled ? "ON" : "OFF");
 	}
 
 	//=====================================================================

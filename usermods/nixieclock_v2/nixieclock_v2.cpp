@@ -44,7 +44,8 @@ void UsermodNixieClock::loop() {
 		}
 	
 		// Only update the display if Nixie tubes should be powered and clock display is enabled.
-		if (mainState && nixiePower && UM_ClockEnabled){
+		// mainState is owned by setNixieMainPower(); bri > 0 is WLED's global on/off — checked independently.
+		if (mainState && (bri > 0) && nixiePower && UM_ClockEnabled){
 			// --- Anti-Poisoning Routine ---
 			// Every 2 minutes (120000 ms), run the anti-poisoning routine if not already running
 			if (currentMillis - lastAntiPoisoningTime >= 120000 && !antiPoisoningInProgress) {
@@ -303,24 +304,9 @@ void UsermodNixieClock::verifyAndFixState() {
 		_logUsermodNixieClock("Internal states synchronized with segments");
 	}
 	
-	// Check main state consistency — skip if an external caller (e.g. hour_effect) has taken control.
-	// When externalControlActive is true, hour_effect has explicitly disabled the display; we must
-	// not re-enable it here just because bri > 0. The external override clears itself when
-	// setNixieMainPower(false) is called or when bri reaches 0.
-	if (!externalControlActive) {
-		bool expectedMainState = (bri > 0);
-		if (mainState != expectedMainState) {
-			_logUsermodNixieClock("Main state inconsistency: actual=%d, expected=%d (bri=%d)",
-						mainState, expectedMainState, bri);
-			mainState = expectedMainState;
-			_logUsermodNixieClock("Main state synchronized");
-		}
-	} else if (bri == 0) {
-		// External control no longer relevant — display is globally off anyway.
-		externalControlActive = false;
-		mainState = false;
-	}
-	
+	// mainState is owned solely by setNixieMainPower() — do not sync it from bri here.
+	// bri > 0 is checked directly in loop() as an independent gate.
+
 	// Validate SPI state
 	if (!lastSpiState) {
 		_logUsermodNixieClock("SPI in failed state during verification, attempting reset");
@@ -498,57 +484,22 @@ bool UsermodNixieClock::readFromConfig(JsonObject &root) {
 void UsermodNixieClock::onStateChange(uint8_t mode) {
 	if (!initDone) return;
 	
-	// Retrieve current power states for each segment.
-	bool prevLedPower = ledPower;
-	bool prevDotsPower = dotsPower;
-	bool prevNixiePower = nixiePower;
-	bool prevMainState = mainState;
-	
-	ledPower = strip.getSegmentsNum() >= 1 ? strip.getSegment(0).getOption(SEG_OPTION_ON) : false;
-	dotsPower = strip.getSegmentsNum() >= 2 ? strip.getSegment(1).getOption(SEG_OPTION_ON) : false;
+	// Read current segment power states.
+	ledPower   = strip.getSegmentsNum() >= 1 ? strip.getSegment(0).getOption(SEG_OPTION_ON) : false;
+	dotsPower  = strip.getSegmentsNum() >= 2 ? strip.getSegment(1).getOption(SEG_OPTION_ON) : false;
 	nixiePower = strip.getSegmentsNum() >= 3 ? strip.getSegment(2).getOption(SEG_OPTION_ON) : false;
-	
-	_logUsermodNixieClock("State change detected. Segment states:");
-	_logUsermodNixieClock("RGB LED segment is %s", ledPower ? "ON" : "OFF");
-	_logUsermodNixieClock("Dots segment is %s", dotsPower ? "ON" : "OFF");
-	_logUsermodNixieClock("Nixie Tubes segment is %s", nixiePower ? "ON" : "OFF");
-	
-	// Determine main power status using the brightness variable.
-	// When 'bri' is 0, main power is off regardless of external control.
-	// When bri > 0 and externalControlActive is set, the external caller (hour_effect) owns
-	// mainState — do not override it.
-	if (bri == 0) {
-		mainState = false;
-		externalControlActive = false; // global off clears any external override
-	} else if (!externalControlActive) {
-		mainState = true;
-	}
-	_logUsermodNixieClock("Main Power (based on bri=%d, externalControl=%s) is %s",
-				bri, externalControlActive ? "active" : "inactive", mainState ? "ON" : "OFF");
-	
-	// Log changes
-	if (prevLedPower != ledPower) {
-		_logUsermodNixieClock("LED power changed: %d -> %d", prevLedPower, ledPower);
-	}
-	if (prevDotsPower != dotsPower) {
-		_logUsermodNixieClock("Dots power changed: %d -> %d", prevDotsPower, dotsPower);
-	}
-	if (prevNixiePower != nixiePower) {
-		_logUsermodNixieClock("Nixie power changed: %d -> %d", prevNixiePower, nixiePower);
-	}
-	if (prevMainState != mainState) {
-		_logUsermodNixieClock("Main state changed: %d -> %d", prevMainState, mainState);
-	}
-	
-	// Apply changes if nixie power or main state changed
-	if (prevNixiePower != nixiePower || prevMainState != mainState) {
-		if (mainState && nixiePower && UM_ClockEnabled) {
-			_logUsermodNixieClock("Nixie tubes ON, updating display");
-			displayTime();
-		} else {
-			_logUsermodNixieClock("Nixie tubes OFF, blanking display");
-			powerOffNixieTubes();
-		}
+
+	_logUsermodNixieClock("State change: bri=%d, mainState=%d, LED=%d, Dots=%d, Nixie=%d",
+				bri, mainState, ledPower, dotsPower, nixiePower);
+
+	// mainState is owned by setNixieMainPower() — do not modify it here.
+	// bri > 0 is the WLED global on/off and is evaluated independently.
+	if (mainState && (bri > 0) && nixiePower && UM_ClockEnabled) {
+		_logUsermodNixieClock("Nixie tubes ON, updating display");
+		displayTime();
+	} else {
+		_logUsermodNixieClock("Nixie tubes OFF, blanking display");
+		powerOffNixieTubes();
 	}
 }
 
