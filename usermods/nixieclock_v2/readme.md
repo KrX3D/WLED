@@ -79,15 +79,24 @@ All settings persist in WLED's JSON config and can be changed live through the W
 
 ## Segment power control
 
-The three WLED segments act as switches:
+The three WLED segments act as independent switches:
 
-| Segment | Controls |
-|---------|---------|
-| 0 (RGB LED) | RGB backlight power |
-| 1 (Dots) | Dot separator power |
-| 2 (Nixie) | Nixie tube power (all six digits) |
+| Segment | Controls | Effect when OFF |
+|---------|---------|-----------------|
+| 0 (RGB LED) | RGB backlight power | LED goes dark |
+| 1 (Dots) | Dot separator output | Dots blank; tubes continue showing time |
+| 2 (Nixie) | Tube digit output | Digits blank; dots continue blinking |
 
-Toggling a segment off/on in the WLED UI or via the API immediately reflects in the display. Segment states are read in `onStateChange()` and verified every 5 seconds in the main loop.
+`nixiePower` (segment 2) and `dotsPower` (segment 1) are fully independent — each controls only its own SPI output bit. All four combinations are valid:
+
+| Segment 2 (Nixie) | Segment 1 (Dots) | Result |
+|-------------------|-----------------|--------|
+| ON | ON | Digits show time + dots blink |
+| ON | OFF | Digits show time, dots off |
+| OFF | ON | Digits blank, dots blink |
+| OFF | OFF | Display fully blank |
+
+Toggling a segment in the WLED UI or via the HTTP/WebSocket API takes effect immediately. Segment states are verified every 5 seconds in the main loop.
 
 ---
 
@@ -95,9 +104,22 @@ Toggling a segment off/on in the WLED UI or via the API immediately reflects in 
 
 Every **2 minutes** the usermod runs a non-blocking anti-poisoning cycle (~3 seconds) that scrolls all digits through 0–9 before returning to the clock. This prevents cathode poisoning on long-lived Nixie tubes.
 
-- Runs only when the display is fully powered (`mainState && nixiePower && UM_ClockEnabled`).
+- Runs only when the nixie segment is on (`nixiePower = true`).
 - Time display is paused during cycling and resumes immediately after.
-- Dots toggle on each step for a visual effect.
+- Dots toggle on each step for a visual effect during the cycle.
+
+---
+
+## Power gating model
+
+Two independent conditions must both be true for the display to update:
+
+| Condition | Source | Controls |
+|-----------|--------|---------|
+| `bri > 0` | WLED global brightness | Global on/off — follows WLED's main power state |
+| `mainState` | `setNixieMainPower()` | External override — controlled by hour_effect_v2 or similar |
+
+`mainState` defaults to `true` and is only changed by `setNixieMainPower()`. It is never synced from `bri`. This means hour_effect can disable the tubes without affecting WLED brightness, and WLED brightness changes will not re-enable tubes that hour_effect has disabled.
 
 ---
 
@@ -114,11 +136,7 @@ Public API method on `UsermodNixieClock`:
 | `true` | Disable tubes (blank display, no SPI output) |
 | `false` | Re-enable tubes |
 
-When called with `true`, an internal `externalControlActive` flag is set. This prevents the 5-second state-verification loop and WLED state-change callbacks from re-enabling the tubes based on `bri` alone — ensuring hour_effect remains in control until it explicitly releases it.
-
-The flag clears automatically when:
-- `setNixieMainPower(false)` is called, or
-- WLED brightness (`bri`) reaches 0 (global off).
+`mainState` is the only gate changed by this call. `bri` is untouched — the RGB LED and WLED brightness are unaffected. Tubes re-enable only when `setNixieMainPower(false)` is explicitly called.
 
 ### `getLedEnabled()` → `bool`
 
@@ -152,13 +170,13 @@ Add `-D NIXIECLOCK` to your PlatformIO build flags, or uncomment `#define USERMO
 All defaults can be overridden in `my_config.h` or via `-D` flags before including the usermod header:
 
 ```c
-#define NIXIECLOCK_ENABLED            false  // must opt-in
-#define LATCH_PIN                     10
-#define NIXIECLOCK_RGB_ENABLED        false
-#define NIXIECLOCK_DOTS_ENABLED       true
-#define NIXIECLOCK_CLOCK_ENABLED      true
-#define NIXIECLOCK_FORCE_NTP_ENABLED  true
-#define NIXIECLOCK_UPDATE_NTP_INTERVAL 30    // minutes
+#define NIXIECLOCK_ENABLED             false  // must opt-in
+#define LATCH_PIN                      10
+#define NIXIECLOCK_RGB_ENABLED         false
+#define NIXIECLOCK_DOTS_ENABLED        true
+#define NIXIECLOCK_CLOCK_ENABLED       true
+#define NIXIECLOCK_FORCE_NTP_ENABLED   true
+#define NIXIECLOCK_UPDATE_NTP_INTERVAL 30     // minutes
 ```
 
 ---
@@ -168,8 +186,9 @@ All defaults can be overridden in `my_config.h` or via `-D` flags before includi
 | Symptom | Likely cause |
 |---------|-------------|
 | Tubes never light up | `Usermod_enabled` is false, or NTP is disabled, or SPI pins are invalid |
-| Tubes go blank after ~5 s and stay blank | `verifyAndFixState()` / `onStateChange()` conflict — ensure you are running the latest version which includes the `externalControlActive` fix |
+| Tubes go blank and stay blank despite bri > 0 | hour_effect_v2 has called `setNixieMainPower(true)`; check hour_effect presence/night-mode state |
 | Wrong time displayed | NTP not synced; check Wi-Fi connection and NTP server settings |
 | Latch pin allocation failed | Another usermod or LED output is using GPIO 10; change `latch_pin` in the usermod config |
 | RGB LED stays off | `Enable_LED` is false, or segment 0 is turned off in the WLED UI |
+| Turning off nixie segment also turns off dots | Ensure you are running the latest version; dots and nixie are independently controlled |
 | Display flickers every 2 min | Expected — anti-poisoning routine running normally |
