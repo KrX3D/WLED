@@ -91,7 +91,9 @@ class UsermodButtonRelayToggle : public Usermod {
     // --- Constants ---
     #define DEBOUNCE_MS 50             // milliseconds for stable reading
     #define MIN_PRESS_MS 50            // minimum stable press duration before allowing toggle
-    #define TOGGLE_LOCKOUT_MS 300      // ignore further toggles for this long after a relay toggle
+    #define TOGGLE_LOCKOUT_MS 500      // ignore further toggles for this long after a relay toggle
+                                       // 500ms covers most mechanical switch bounce/flutter; increase if
+                                       // a specific button still double-triggers
 
     // --- Button state arrays (one per group) ---
     // Debounce + lockout per-button state
@@ -300,7 +302,7 @@ class UsermodButtonRelayToggle : public Usermod {
 
           // On a released (short) press -> toggle relay (matches original behavior)
           #ifndef WLED_DISABLE_MQTT
-          publishMqtt("Button", index + 1, false); // publish RELEASED as original code did
+          publishMqtt("Button", index + 1, true); // publish RELEASED as original code did (state=false)
           #endif
           toggleRelay(index);
           _lastToggleTime[index] = now;
@@ -662,7 +664,7 @@ class UsermodButtonRelayToggle : public Usermod {
 			} else {
 				bool relayState = _activeLow[i] ? !digitalRead(_relayPins[i]) : digitalRead(_relayPins[i]);
 				_logUsermodB_R_T("Relay group %d current state: %s", i + 1, relayState ? "ON" : "OFF");
-				publishMqtt("Relay", i + 1, relayState, false);
+				publishMqtt("Relay", i + 1, relayState);
 				if(mqtt->subscribe(subscriptionTopic.c_str(), 0)){
 				  _logUsermodB_R_T("Successfully subscribed to topic: %s", subscriptionTopic.c_str());
 				} else {
@@ -710,27 +712,6 @@ class UsermodButtonRelayToggle : public Usermod {
 	                          _relayPins[i],
 	                          _activeLow[i] ? "Y" : "N");
       }
-    }
-
-    ////////////////////////////////////////////////////////////////////////////////
-    // Pin initialization (for both buttons and relays)
-    ////////////////////////////////////////////////////////////////////////////////
-    void initializePin(int pin, bool isInput, bool usePullUp, bool activeLow, int group) {
-	  if (pin == -1) return;
-        if (isInput) {
-          pinMode(pin, usePullUp ? INPUT_PULLUP : INPUT);
-	    _logUsermodB_R_T("Initialized %s: Button pin %d (PullUp: %s)",
-	                         _groups[group],
-	                         pin,
-	                         usePullUp ? "true" : "false");
-	  } else {
-          pinMode(pin, OUTPUT);
-          digitalWrite(pin, activeLow ? HIGH : LOW);
-	    _logUsermodB_R_T("Initialized %s: Relay pin %d (ActiveLow: %s)",
-	                         _groups[group],
-	                         pin,
-	                         activeLow ? "true" : "false");
-        }
     }
 
     ////////////////////////////////////////////////////////////////////////////////
@@ -930,7 +911,7 @@ class UsermodButtonRelayToggle : public Usermod {
 		// For relays, read and publish the actual current state
 		if (_relayPins[i] != -1) {
 		  bool relayState = _activeLow[i] ? !digitalRead(_relayPins[i]) : digitalRead(_relayPins[i]);
-		  publishMqtt("Relay", i + 1, relayState, false);
+		  publishMqtt("Relay", i + 1, relayState);
 		}
 	  }
 	  #endif
@@ -970,12 +951,14 @@ class UsermodButtonRelayToggle : public Usermod {
 		  return true;
 		}
 
-		// Otherwise apply the new state
-		_logUsermodB_R_T("Applying /set for group %u → %s", i + 1, desiredOn?"ON":"OFF");
+		// Apply the new state
+		_logUsermodB_R_T("Applying /set for group %u → %s", i + 1, desiredOn ? "ON" : "OFF");
 		digitalWrite(_relayPins[i], _activeLow[i] ? !desiredOn : desiredOn);
-		
-		// And re-publish so HA sees the updated state
-		publishMqtt("Relay", i + 1, desiredOn, false);
+
+		// Publish state topic only (NOT the command/set topic — that would create an MQTT loop)
+		char stateTopic[128];
+		snprintf_P(stateTopic, sizeof(stateTopic), "%s/Button_Relay_Toggle/group_%u/Relay", mqttDeviceTopic, i + 1);
+		publishMqttMessage(stateTopic, desiredOn ? "ON" : "OFF");
 		return true;
 	  }
       _logUsermodB_R_T("No matching MQTT topic found.");
@@ -987,7 +970,7 @@ class UsermodButtonRelayToggle : public Usermod {
     // Publish an MQTT message for a given group and message type.
     // "Button" messages publish a descriptive string; "Relay" messages publish ON/OFF.
     ////////////////////////////////////////////////////////////////////////////////
-    void publishMqtt(const char* message, uint8_t group, bool state, bool mirrorSet = true) {
+    void publishMqtt(const char* message, uint8_t group, bool state) {
       #ifndef WLED_DISABLE_MQTT
         if (!WLED_MQTT_CONNECTED) {
 		  _logUsermodB_R_T("MQTT not connected. Cannot publish MQTT message.");
@@ -1010,15 +993,10 @@ class UsermodButtonRelayToggle : public Usermod {
         }
         _logUsermodB_R_T("Publishing to topic: %s, Payload: %s", topic, payload);
         publishMqttMessage(topic, payload);
-
-        if (mirrorSet && strcmp(message, "Relay") == 0) {
-          char setT[128];
-          strcpy(setT, topic);
-          strncat(setT, "/set", sizeof(setT) - strlen(setT) - 1);
-
-          publishMqttMessage(setT, payload);
-          _logUsermodB_R_T("Mirrored command to topic: %s → %s", setT, payload);
-        }
+        // NOTE: we intentionally do NOT mirror state to the /Relay/set command topic.
+        // Publishing retained state to a command topic causes MQTT loops: the broker
+        // delivers the retained message back to this device, which then re-publishes,
+        // creating an on/off cycle. HA reads relay state from the state topic above.
       #endif
     }
 
