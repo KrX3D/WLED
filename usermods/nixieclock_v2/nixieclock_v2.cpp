@@ -43,12 +43,11 @@ void UsermodNixieClock::loop() {
 			}
 		}
 	
-		// mainState is owned by setNixieMainPower(); bri > 0 is WLED's global on/off — both are independent gates.
-		if (mainState && (bri > 0) && UM_ClockEnabled) {
+		// mainState is owned by setNixieMainPower(); bri > 0 is WLED's global on/off.
+		// nixiePower and dotsPower are independent — displayTime() handles both via show().
+		if (mainState && (bri > 0) && (nixiePower || dotsPower) && UM_ClockEnabled) {
+			// Anti-poisoning only makes sense when tubes are on
 			if (nixiePower) {
-				// --- Full mode: tubes + dots ---
-
-				// Anti-Poisoning: every 2 minutes cycle all digits
 				if (currentMillis - lastAntiPoisoningTime >= 120000 && !antiPoisoningInProgress) {
 					lastAntiPoisoningTime = currentMillis;
 					startAntiPoisoning();
@@ -61,26 +60,15 @@ void UsermodNixieClock::loop() {
 					ntpLastSyncTime = NTP_NEVER;
 					lastNtpUpdate = currentMillis;
 				}
-
-				// Update display every second (skip during anti-poisoning)
-				if (currentMillis - lastCheck >= 1000) {
-					lastCheck = currentMillis;
-					if (!antiPoisoningInProgress) displayTime();
-				}
-
-			} else if (dotsPower) {
-				// --- Dots-only mode: tubes off, dots still blink ---
-				// Send blank digits every second; show() gates the dot mask on dotsPower.
-				if (currentMillis - lastCheck >= 1000) {
-					lastCheck = currentMillis;
-					byte blank[6] = {DIGIT_BLANK, DIGIT_BLANK, DIGIT_BLANK, DIGIT_BLANK, DIGIT_BLANK, DIGIT_BLANK};
-					setDigits(blank);
-					dotsEnable(second(localTime) % 2 == 0);
-					show();
-				}
 			}
 
-			// Recovery applies regardless of nixie/dots state
+			// Update display every second (skip during anti-poisoning)
+			if (currentMillis - lastCheck >= 1000) {
+				lastCheck = currentMillis;
+				if (!antiPoisoningInProgress) displayTime();
+			}
+
+			// Recovery
 			static unsigned long lastRecovery = 0;
 			if (!lastSpiState && (currentMillis - lastRecovery >= 60000)) {
 				lastRecovery = currentMillis;
@@ -128,17 +116,24 @@ void UsermodNixieClock::updateSegments() {
 	}
 }
 
-// Update the display with the current time.
-// Note: Assumes global variable 'localTime' exists and is updated elsewhere.
+// Update the display.
+// nixiePower and dotsPower are fully independent:
+//   nixiePower=true  → show time digits;  false → blank digits
+//   dotsPower=true   → blink dots;        false → dots off (gated inside show())
+// show() applies the dotsPower gate, so this function doesn't need to check it.
 void UsermodNixieClock::displayTime() {
-	// Get current time digits.
-	byte timeDigits[] = {
-		static_cast<byte>(hour(localTime) / 10), static_cast<byte>(hour(localTime) % 10),
-		static_cast<byte>(minute(localTime) / 10), static_cast<byte>(minute(localTime) % 10),
-		static_cast<byte>(second(localTime) / 10), static_cast<byte>(second(localTime) % 10)
-	};
-	setDigits(timeDigits);
-	dotsEnable(second(localTime) % 2 == 0); // Toggle dots every second	
+	if (nixiePower) {
+		byte timeDigits[] = {
+			static_cast<byte>(hour(localTime) / 10), static_cast<byte>(hour(localTime) % 10),
+			static_cast<byte>(minute(localTime) / 10), static_cast<byte>(minute(localTime) % 10),
+			static_cast<byte>(second(localTime) / 10), static_cast<byte>(second(localTime) % 10)
+		};
+		setDigits(timeDigits);
+	} else {
+		byte blank[6] = {DIGIT_BLANK, DIGIT_BLANK, DIGIT_BLANK, DIGIT_BLANK, DIGIT_BLANK, DIGIT_BLANK};
+		setDigits(blank);
+	}
+	dotsEnable(second(localTime) % 2 == 0); // show() gates this on dotsPower
 	show();
 }
 
@@ -507,18 +502,11 @@ void UsermodNixieClock::onStateChange(uint8_t mode) {
 				bri, mainState, ledPower, dotsPower, nixiePower);
 
 	// mainState is owned by setNixieMainPower() — do not modify it here.
-	// bri > 0 is the WLED global on/off and is evaluated independently.
-	// Dots and nixie are separate: turning off the nixie segment keeps dots running.
-	if (mainState && (bri > 0) && nixiePower && UM_ClockEnabled) {
-		_logUsermodNixieClock("Nixie + dots ON, updating display");
+	// bri > 0 is the WLED global on/off. nixiePower and dotsPower are independent.
+	// displayTime() handles both: digits gated on nixiePower, dots gated on dotsPower via show().
+	if (mainState && (bri > 0) && (nixiePower || dotsPower) && UM_ClockEnabled) {
+		_logUsermodNixieClock("Display active (nixie=%d dots=%d), refreshing", nixiePower, dotsPower);
 		displayTime();
-	} else if (mainState && (bri > 0) && dotsPower) {
-		// Nixie segment off but dots segment still on: blank tubes, leave dots as-is.
-		// loop() will handle blinking on the next 1-second tick.
-		_logUsermodNixieClock("Dots-only mode: blanking tube digits");
-		byte blank[6] = {DIGIT_BLANK, DIGIT_BLANK, DIGIT_BLANK, DIGIT_BLANK, DIGIT_BLANK, DIGIT_BLANK};
-		setDigits(blank);
-		show(); // show() gates dots on dotsPower; dotsEnabled state is preserved
 	} else {
 		_logUsermodNixieClock("All off: blanking tubes and dots");
 		powerOffNixieTubes();
