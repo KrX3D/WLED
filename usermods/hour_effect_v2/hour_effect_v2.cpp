@@ -3431,7 +3431,7 @@ EXAMPLE 1: Presence with OR logic (any sensor triggers presence)
   "sensors": [
     {
       "id": "kitchen_wave",
-      "topic": "zigbee2mqtt/K�che mWave",
+      "topic": "zigbee2mqtt/Küche mWave",
       "path": "presence",
       "on_values": "on,true,1"
     },
