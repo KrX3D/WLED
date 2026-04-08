@@ -1,17 +1,12 @@
 #include "nixieclock_v2.h"
 
-// Initialize SPI with required settings.
+// Apply required SPI settings.
+// WLED initialises the SPI bus globally; this function only (re-)applies the
+// data mode that the Nixie tube driver requires. Called during setup and recovery.
 bool UsermodNixieClock::setupSPI() {
-	//try {
-		//SPI.begin(spi_sclk, -1, spi_mosi); clkPin = 18; mosiPin = 23;
-		SPI.setDataMode(SPI_MODE2); // Must be MODE2 for the display to work correctly.
-		//SPI.setFrequency(2000000); // 2MHz SPI
-		_logUsermodNixieClock("SPI initialized successfully");
-		return true;
-	//} catch (...) {
-		//_logUsermodNixieClock("ERROR: SPI initialization failed!");
-		//return false;
-	//}
+	SPI.setDataMode(SPI_MODE2); // Must be MODE2 for the display to work correctly.
+	_logUsermodNixieClock("SPI mode set to MODE2");
+	return true;
 }
 
 UsermodNixieClock::~UsermodNixieClock() {
@@ -178,21 +173,11 @@ void UsermodNixieClock::show() {
 			(unsigned long)SymbolArray[digits[i * 3 + 2]] |
 			(mainState && dotsPower && dotsEnabled && UM_DotsEnabled ? (UPPER_DOTS_MASK | LOWER_DOTS_MASK) : 0);
 
-		// Log the data being sent (occasionally)
-		//if (random(0, 100) < 5) { // 5% chance to log to avoid flooding
-			//_logUsermodNixieClock("SPI data chunk %d: 0x%08X", i, Var32);
-		//}
-		
 		// Transmit the 32-bit value as four bytes over SPI.
-		//try {
-			SPI.transfer(Var32 >> 24);
-			SPI.transfer(Var32 >> 16);
-			SPI.transfer(Var32 >> 8);
-			SPI.transfer(Var32);
-		//} catch (...) {
-			//_logUsermodNixieClock("ERROR: SPI transfer failed!");
-			//success = false;
-		//}
+		SPI.transfer(Var32 >> 24);
+		SPI.transfer(Var32 >> 16);
+		SPI.transfer(Var32 >> 8);
+		SPI.transfer(Var32);
 	}
 	// End data transfer: set latch pin HIGH to latch the data.
 	digitalWrite(UM_latchPin, HIGH);
@@ -318,13 +303,22 @@ void UsermodNixieClock::verifyAndFixState() {
 		_logUsermodNixieClock("Internal states synchronized with segments");
 	}
 	
-	// Check main state consistency
-	bool expectedMainState = (bri > 0);
-	if (mainState != expectedMainState) {
-		_logUsermodNixieClock("Main state inconsistency: actual=%d, expected=%d (bri=%d)", 
-					mainState, expectedMainState, bri);
-		mainState = expectedMainState;
-		_logUsermodNixieClock("Main state synchronized");
+	// Check main state consistency — skip if an external caller (e.g. hour_effect) has taken control.
+	// When externalControlActive is true, hour_effect has explicitly disabled the display; we must
+	// not re-enable it here just because bri > 0. The external override clears itself when
+	// setNixieMainPower(false) is called or when bri reaches 0.
+	if (!externalControlActive) {
+		bool expectedMainState = (bri > 0);
+		if (mainState != expectedMainState) {
+			_logUsermodNixieClock("Main state inconsistency: actual=%d, expected=%d (bri=%d)",
+						mainState, expectedMainState, bri);
+			mainState = expectedMainState;
+			_logUsermodNixieClock("Main state synchronized");
+		}
+	} else if (bri == 0) {
+		// External control no longer relevant — display is globally off anyway.
+		externalControlActive = false;
+		mainState = false;
 	}
 	
 	// Validate SPI state
@@ -433,16 +427,17 @@ void UsermodNixieClock::performRecovery() {
 	// Reset all state
 	verifyAndFixState();
 	
-	// Reset display
+	// Optimistically mark SPI as recovered so show() can proceed.
+	// If the bus is still broken, show() will detect it on the next send attempt.
+	lastSpiState = true;
+
+	// Refresh display
 	if (mainState && nixiePower && UM_ClockEnabled) {
 		displayTime();
 	} else {
 		powerOffNixieTubes();
 	}
-	
-	// Force successful SPI state to trigger show() to work
-	lastSpiState = true;
-	
+
 	_logUsermodNixieClock("Recovery procedure complete");
 }
 
@@ -519,9 +514,17 @@ void UsermodNixieClock::onStateChange(uint8_t mode) {
 	_logUsermodNixieClock("Nixie Tubes segment is %s", nixiePower ? "ON" : "OFF");
 	
 	// Determine main power status using the brightness variable.
-	// When 'bri' is 0, main power is off; otherwise it is on.
-	mainState = (bri > 0);
-	_logUsermodNixieClock("Main Power (based on bri=%d) is %s", bri, mainState ? "ON" : "OFF");
+	// When 'bri' is 0, main power is off regardless of external control.
+	// When bri > 0 and externalControlActive is set, the external caller (hour_effect) owns
+	// mainState — do not override it.
+	if (bri == 0) {
+		mainState = false;
+		externalControlActive = false; // global off clears any external override
+	} else if (!externalControlActive) {
+		mainState = true;
+	}
+	_logUsermodNixieClock("Main Power (based on bri=%d, externalControl=%s) is %s",
+				bri, externalControlActive ? "active" : "inactive", mainState ? "ON" : "OFF");
 	
 	// Log changes
 	if (prevLedPower != ledPower) {
