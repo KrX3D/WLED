@@ -30,8 +30,8 @@
     #define NIXIECLOCK_FORCE_NTP_ENABLED true
 #endif
 
-#ifndef NIXIECLOCK_UPDATE_NTP_INTERVALL
-    #define NIXIECLOCK_UPDATE_NTP_INTERVALL 30 // minutes
+#ifndef NIXIECLOCK_UPDATE_NTP_INTERVAL
+    #define NIXIECLOCK_UPDATE_NTP_INTERVAL 30 // minutes
 #endif
 
 #define DIGIT_BLANK 10  // Use an index that doesn't exist in 0-9
@@ -46,8 +46,8 @@ private:
     unsigned long lastNtpUpdate = 0, lastCheck = 0;
     uint16_t digits[6] = {0};
     bool dotsEnabled = false;
-    bool lastSpiState = false;  // Track SPI state to detect failures
-    unsigned long lastStateCheck = 0;  // Track when we last checked states
+    bool lastSpiState = false;        // Track SPI state to detect failures
+    unsigned long lastStateCheck = 0; // Track when we last checked states
 
     // Member variables for non-blocking anti-poisoning
     bool antiPoisoningInProgress = false;
@@ -67,7 +67,7 @@ private:
     bool UM_DotsEnabled = NIXIECLOCK_DOTS_ENABLED;
     bool UM_ClockEnabled = NIXIECLOCK_CLOCK_ENABLED;
     bool UM_ntpUpdateForce = NIXIECLOCK_FORCE_NTP_ENABLED;   // Flag to enable/disable forced NTP update
-    uint16_t UM_ntpUpdateInterval = NIXIECLOCK_UPDATE_NTP_INTERVALL; // Interval in minutes
+    uint16_t UM_ntpUpdateInterval = NIXIECLOCK_UPDATE_NTP_INTERVAL; // Interval in minutes
     uint32_t ntpUpdateInterval = UM_ntpUpdateInterval * 1000UL * 60UL; // Convert to milliseconds
 	
     // --- Symbol Array: Mapping of digits to segment bit patterns ---
@@ -102,22 +102,19 @@ public:
 	//=====================================================================
 	// Can be used outside of this usermod to control the main power state.
 	// For compatibility with other usermods, "true" disables the nixie clock.
+	// External API for other usermods (e.g. hour_effect_v2).
+	// state=true  → disable tubes (blank display).
+	// state=false → re-enable tubes.
+	// mainState is the only gate; bri > 0 is checked separately in the main loop,
+	// so this does not interact with WLED brightness at all.
 	void setNixieMainPower(bool state) {
 		bool enabled = !state;
-		if (mainState == enabled) {
-			return;
-		}
+		if (mainState == enabled) return;
 
 		mainState = enabled;
+		if (!enabled) powerOffNixieTubes();
 
-		if (!enabled) {
-			// If power for Nixie tubes is off, clear the display.
-			powerOffNixieTubes();
-		}
-
-		#ifdef DEBUG_PRINTF
-			_logUsermodNixieClock("Nixie main power set to: %s", enabled ? "ON" : "OFF");
-		#endif
+		_logUsermodNixieClock("Nixie main power set to: %s", enabled ? "ON" : "OFF");
 	}
 
 	//=====================================================================

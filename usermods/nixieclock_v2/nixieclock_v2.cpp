@@ -1,17 +1,12 @@
 #include "nixieclock_v2.h"
 
-// Initialize SPI with required settings.
+// Apply required SPI settings.
+// WLED initialises the SPI bus globally; this function only (re-)applies the
+// data mode that the Nixie tube driver requires. Called during setup and recovery.
 bool UsermodNixieClock::setupSPI() {
-	//try {
-		//SPI.begin(spi_sclk, -1, spi_mosi); clkPin = 18; mosiPin = 23;
-		SPI.setDataMode(SPI_MODE2); // Must be MODE2 for the display to work correctly.
-		//SPI.setFrequency(2000000); // 2MHz SPI
-		_logUsermodNixieClock("SPI initialized successfully");
-		return true;
-	//} catch (...) {
-		//_logUsermodNixieClock("ERROR: SPI initialization failed!");
-		//return false;
-	//}
+	SPI.setDataMode(SPI_MODE2); // Must be MODE2 for the display to work correctly.
+	_logUsermodNixieClock("SPI mode set to MODE2");
+	return true;
 }
 
 UsermodNixieClock::~UsermodNixieClock() {
@@ -48,37 +43,32 @@ void UsermodNixieClock::loop() {
 			}
 		}
 	
-		// Only update the display if Nixie tubes should be powered and clock display is enabled.
-		if (mainState && nixiePower && UM_ClockEnabled){
-			// --- Anti-Poisoning Routine ---
-			// Every 2 minutes (120000 ms), run the anti-poisoning routine if not already running
-			if (currentMillis - lastAntiPoisoningTime >= 120000 && !antiPoisoningInProgress) {
-				lastAntiPoisoningTime = currentMillis;
-				startAntiPoisoning();
-			}
+		// mainState is owned by setNixieMainPower(); bri > 0 is WLED's global on/off.
+		// nixiePower and dotsPower are independent — displayTime() handles both via show().
+		if (mainState && (bri > 0) && (nixiePower || dotsPower) && UM_ClockEnabled) {
+			// Anti-poisoning only makes sense when tubes are on
+			if (nixiePower) {
+				if (currentMillis - lastAntiPoisoningTime >= 120000 && !antiPoisoningInProgress) {
+					lastAntiPoisoningTime = currentMillis;
+					startAntiPoisoning();
+				}
+				handleAntiPoisoning();
 
-			// Instead of blocking, call the handler
-			handleAntiPoisoning();
-
-			// --- Force NTP Update ---
-			// If connected to Wifi and forced NTP updates are enabled, force an update after the set interval.
-			if (WLED_CONNECTED && UM_ntpUpdateForce && (currentMillis - lastNtpUpdate >= ntpUpdateInterval)) {
-				_logUsermodNixieClock("Force NTP Update triggered");
-				ntpLastSyncTime = NTP_NEVER; // Force new NTP query (global variable expected)
-				lastNtpUpdate = currentMillis;
-			}
-
-			// --- Update the Time Display every second ---
-			if (currentMillis - lastCheck >= 1000) {
-				lastCheck = currentMillis;
-				// Only update display if anti-poisoning is not active
-				if (!antiPoisoningInProgress) {
-					displayTime();
+				// Force NTP re-sync at the configured interval
+				if (WLED_CONNECTED && UM_ntpUpdateForce && (currentMillis - lastNtpUpdate >= ntpUpdateInterval)) {
+					_logUsermodNixieClock("Force NTP Update triggered");
+					ntpLastSyncTime = NTP_NEVER;
+					lastNtpUpdate = currentMillis;
 				}
 			}
-		
-			// --- Recovery (simulate user pressing clock reset) ---
-			// If we've had a failure, attempt recovery every 60 seconds
+
+			// Update display every second (skip during anti-poisoning)
+			if (currentMillis - lastCheck >= 1000) {
+				lastCheck = currentMillis;
+				if (!antiPoisoningInProgress) displayTime();
+			}
+
+			// Recovery
 			static unsigned long lastRecovery = 0;
 			if (!lastSpiState && (currentMillis - lastRecovery >= 60000)) {
 				lastRecovery = currentMillis;
@@ -126,17 +116,24 @@ void UsermodNixieClock::updateSegments() {
 	}
 }
 
-// Update the display with the current time.
-// Note: Assumes global variable 'localTime' exists and is updated elsewhere.
+// Update the display.
+// nixiePower and dotsPower are fully independent:
+//   nixiePower=true  → show time digits;  false → blank digits
+//   dotsPower=true   → blink dots;        false → dots off (gated inside show())
+// show() applies the dotsPower gate, so this function doesn't need to check it.
 void UsermodNixieClock::displayTime() {
-	// Get current time digits.
-	byte timeDigits[] = {
-		static_cast<byte>(hour(localTime) / 10), static_cast<byte>(hour(localTime) % 10),
-		static_cast<byte>(minute(localTime) / 10), static_cast<byte>(minute(localTime) % 10),
-		static_cast<byte>(second(localTime) / 10), static_cast<byte>(second(localTime) % 10)
-	};
-	setDigits(timeDigits);
-	dotsEnable(second(localTime) % 2 == 0); // Toggle dots every second	
+	if (nixiePower) {
+		byte timeDigits[] = {
+			static_cast<byte>(hour(localTime) / 10), static_cast<byte>(hour(localTime) % 10),
+			static_cast<byte>(minute(localTime) / 10), static_cast<byte>(minute(localTime) % 10),
+			static_cast<byte>(second(localTime) / 10), static_cast<byte>(second(localTime) % 10)
+		};
+		setDigits(timeDigits);
+	} else {
+		byte blank[6] = {DIGIT_BLANK, DIGIT_BLANK, DIGIT_BLANK, DIGIT_BLANK, DIGIT_BLANK, DIGIT_BLANK};
+		setDigits(blank);
+	}
+	dotsEnable(second(localTime) % 2 == 0); // show() gates this on dotsPower
 	show();
 }
 
@@ -178,21 +175,11 @@ void UsermodNixieClock::show() {
 			(unsigned long)SymbolArray[digits[i * 3 + 2]] |
 			(mainState && dotsPower && dotsEnabled && UM_DotsEnabled ? (UPPER_DOTS_MASK | LOWER_DOTS_MASK) : 0);
 
-		// Log the data being sent (occasionally)
-		//if (random(0, 100) < 5) { // 5% chance to log to avoid flooding
-			//_logUsermodNixieClock("SPI data chunk %d: 0x%08X", i, Var32);
-		//}
-		
 		// Transmit the 32-bit value as four bytes over SPI.
-		//try {
-			SPI.transfer(Var32 >> 24);
-			SPI.transfer(Var32 >> 16);
-			SPI.transfer(Var32 >> 8);
-			SPI.transfer(Var32);
-		//} catch (...) {
-			//_logUsermodNixieClock("ERROR: SPI transfer failed!");
-			//success = false;
-		//}
+		SPI.transfer(Var32 >> 24);
+		SPI.transfer(Var32 >> 16);
+		SPI.transfer(Var32 >> 8);
+		SPI.transfer(Var32);
 	}
 	// End data transfer: set latch pin HIGH to latch the data.
 	digitalWrite(UM_latchPin, HIGH);
@@ -318,15 +305,9 @@ void UsermodNixieClock::verifyAndFixState() {
 		_logUsermodNixieClock("Internal states synchronized with segments");
 	}
 	
-	// Check main state consistency
-	bool expectedMainState = (bri > 0);
-	if (mainState != expectedMainState) {
-		_logUsermodNixieClock("Main state inconsistency: actual=%d, expected=%d (bri=%d)", 
-					mainState, expectedMainState, bri);
-		mainState = expectedMainState;
-		_logUsermodNixieClock("Main state synchronized");
-	}
-	
+	// mainState is owned solely by setNixieMainPower() — do not sync it from bri here.
+	// bri > 0 is checked directly in loop() as an independent gate.
+
 	// Validate SPI state
 	if (!lastSpiState) {
 		_logUsermodNixieClock("SPI in failed state during verification, attempting reset");
@@ -433,16 +414,17 @@ void UsermodNixieClock::performRecovery() {
 	// Reset all state
 	verifyAndFixState();
 	
-	// Reset display
+	// Optimistically mark SPI as recovered so show() can proceed.
+	// If the bus is still broken, show() will detect it on the next send attempt.
+	lastSpiState = true;
+
+	// Refresh display
 	if (mainState && nixiePower && UM_ClockEnabled) {
 		displayTime();
 	} else {
 		powerOffNixieTubes();
 	}
-	
-	// Force successful SPI state to trigger show() to work
-	lastSpiState = true;
-	
+
 	_logUsermodNixieClock("Recovery procedure complete");
 }
 
@@ -503,49 +485,31 @@ bool UsermodNixieClock::readFromConfig(JsonObject &root) {
 void UsermodNixieClock::onStateChange(uint8_t mode) {
 	if (!initDone) return;
 	
-	// Retrieve current power states for each segment.
-	bool prevLedPower = ledPower;
-	bool prevDotsPower = dotsPower;
+	// Snapshot previous states for change-logging.
+	bool prevLedPower   = ledPower;
+	bool prevDotsPower  = dotsPower;
 	bool prevNixiePower = nixiePower;
-	bool prevMainState = mainState;
-	
-	ledPower = strip.getSegmentsNum() >= 1 ? strip.getSegment(0).getOption(SEG_OPTION_ON) : false;
-	dotsPower = strip.getSegmentsNum() >= 2 ? strip.getSegment(1).getOption(SEG_OPTION_ON) : false;
+
+	// Read current segment power states.
+	ledPower   = strip.getSegmentsNum() >= 1 ? strip.getSegment(0).getOption(SEG_OPTION_ON) : false;
+	dotsPower  = strip.getSegmentsNum() >= 2 ? strip.getSegment(1).getOption(SEG_OPTION_ON) : false;
 	nixiePower = strip.getSegmentsNum() >= 3 ? strip.getSegment(2).getOption(SEG_OPTION_ON) : false;
-	
-	_logUsermodNixieClock("State change detected. Segment states:");
-	_logUsermodNixieClock("RGB LED segment is %s", ledPower ? "ON" : "OFF");
-	_logUsermodNixieClock("Dots segment is %s", dotsPower ? "ON" : "OFF");
-	_logUsermodNixieClock("Nixie Tubes segment is %s", nixiePower ? "ON" : "OFF");
-	
-	// Determine main power status using the brightness variable.
-	// When 'bri' is 0, main power is off; otherwise it is on.
-	mainState = (bri > 0);
-	_logUsermodNixieClock("Main Power (based on bri=%d) is %s", bri, mainState ? "ON" : "OFF");
-	
-	// Log changes
-	if (prevLedPower != ledPower) {
-		_logUsermodNixieClock("LED power changed: %d -> %d", prevLedPower, ledPower);
-	}
-	if (prevDotsPower != dotsPower) {
-		_logUsermodNixieClock("Dots power changed: %d -> %d", prevDotsPower, dotsPower);
-	}
-	if (prevNixiePower != nixiePower) {
-		_logUsermodNixieClock("Nixie power changed: %d -> %d", prevNixiePower, nixiePower);
-	}
-	if (prevMainState != mainState) {
-		_logUsermodNixieClock("Main state changed: %d -> %d", prevMainState, mainState);
-	}
-	
-	// Apply changes if nixie power or main state changed
-	if (prevNixiePower != nixiePower || prevMainState != mainState) {
-		if (mainState && nixiePower && UM_ClockEnabled) {
-			_logUsermodNixieClock("Nixie tubes ON, updating display");
-			displayTime();
-		} else {
-			_logUsermodNixieClock("Nixie tubes OFF, blanking display");
-			powerOffNixieTubes();
-		}
+
+	if (prevLedPower   != ledPower)   _logUsermodNixieClock("LED power changed:   %d -> %d", prevLedPower,   ledPower);
+	if (prevDotsPower  != dotsPower)  _logUsermodNixieClock("Dots power changed:  %d -> %d", prevDotsPower,  dotsPower);
+	if (prevNixiePower != nixiePower) _logUsermodNixieClock("Nixie power changed: %d -> %d", prevNixiePower, nixiePower);
+	_logUsermodNixieClock("bri=%d mainState=%d LED=%d Dots=%d Nixie=%d",
+				bri, mainState, ledPower, dotsPower, nixiePower);
+
+	// mainState is owned by setNixieMainPower() — do not modify it here.
+	// bri > 0 is the WLED global on/off. nixiePower and dotsPower are independent.
+	// displayTime() handles both: digits gated on nixiePower, dots gated on dotsPower via show().
+	if (mainState && (bri > 0) && (nixiePower || dotsPower) && UM_ClockEnabled) {
+		_logUsermodNixieClock("Display active (nixie=%d dots=%d), refreshing", nixiePower, dotsPower);
+		displayTime();
+	} else {
+		_logUsermodNixieClock("All off: blanking tubes and dots");
+		powerOffNixieTubes();
 	}
 }
 
