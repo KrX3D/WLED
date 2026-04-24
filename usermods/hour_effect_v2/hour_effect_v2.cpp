@@ -1155,9 +1155,6 @@ void UsermodHourEffect::loop() {
           _logUsermodHourEffect("[LOOP] ALL triggers blocked for effect");
           lastTime = currentMillis;
 
-          // Small delay to ensure block is processed
-          delay(50);
-
           _BackupCurrentLedState();
 
           // Apply the effect settings
@@ -1515,9 +1512,6 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
       BlockTriggers = true;  // Block presence/lux triggers during effect
       _logUsermodHourEffect("[MQTT-MSG] Effect mode activated, ALL triggers blocked");
 
-      // Small delay to ensure block is processed
-      delay(50);
-
       _BackupCurrentLedState();
 
       // Apply green blink effect
@@ -1569,8 +1563,6 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
 
     BlockTriggers = true;
     _logUsermodHourEffect("[MQTT-MSG] Notification effect activated, ALL triggers blocked");
-
-    delay(50);
 
     _BackupCurrentLedState();
     applyEffectSettings(r, g, b, w, effectMode);
@@ -1887,9 +1879,6 @@ void UsermodHourEffect::_BackupCurrentLedState() {
     segmentBackup = new BackupHelper<Segment>[numSegments];
   }
   
-  // Small delay to let any ongoing transitions complete
-  delay(50);
-
   LastBriValue = bri;  // Save current brightness.
   _logUsermodHourEffect("[BACKUP-STATE] Saved LastBriValue=%d", LastBriValue);
 
@@ -2103,8 +2092,8 @@ bool UsermodHourEffect::evaluateSensorState(const MqttSensor& sensor, const Stri
     
     onValue.trim();
     
-    if (onValue.length() > 0 && value.indexOf(onValue) >= 0) {
-      _logUsermodHourEffect("[SENSOR-EVAL] MATCH found: '%s' contains '%s' => TRUE", value.c_str(), onValue.c_str());
+    if (onValue.length() > 0 && value == onValue) {
+      _logUsermodHourEffect("[SENSOR-EVAL] MATCH found: '%s' == '%s' => TRUE", value.c_str(), onValue.c_str());
       return true;
     }
   }
@@ -2203,7 +2192,13 @@ bool UsermodHourEffect::evaluateLogicExpression(const String& expression, const 
   // Handle parentheses recursively
   int parenStart = expr.indexOf('(');
   if (parenStart >= 0) {
-    int parenEnd = expr.lastIndexOf(')');
+    // Find the matching closing paren (handle nesting)
+    int parenEnd = -1;
+    int depth = 1;
+    for (int ci = parenStart + 1; ci < (int)expr.length(); ci++) {
+      if (expr[ci] == '(') depth++;
+      else if (expr[ci] == ')') { depth--; if (depth == 0) { parenEnd = ci; break; } }
+    }
     if (parenEnd > parenStart) {
       String inner = expr.substring(parenStart + 1, parenEnd);
       _logUsermodHourEffect("[LOGIC-EVAL] Processing parentheses: (%s)", inner.c_str());
@@ -2429,6 +2424,7 @@ void UsermodHourEffect::addToConfig(JsonObject& root) {
       s["id"] = sensor.id;
       s["topic"] = sensor.topic;
       s["path"] = sensor.path;
+      s["on_values"] = sensor.onValues;
     }
     doc["logic_true"] = luxConfig.logicTrue;
     
@@ -3493,7 +3489,7 @@ EXAMPLE 4: Blocker with multiple conditions
   "sensors": [
     {
       "id": "manual_switch",
-      "topic": "zigbee2mqtt/Küche Licht",
+      "topic": "zigbee2mqtt/K�che Licht",
       "path": "state_center",
       "on_values": "on,true,1"
     }
