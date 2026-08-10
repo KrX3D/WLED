@@ -166,9 +166,10 @@ void UsermodHourEffect::handleSimpleMultiTopicPresence(const String& topics, con
   // Update presence value only if combined state changed
   if (allOn != presenceValue) {
     presenceValue = allOn;
-    _logUsermodHourEffect("[MULTI-PRESENCE] Combined presence CHANGED: %s -> %s", 
+    manualOffOverride = false; // a genuine presence transition supersedes any manual override
+    _logUsermodHourEffect("[MULTI-PRESENCE] Combined presence CHANGED: %s -> %s",
                           !allOn ? "OFF" : "ON", allOn ? "ON" : "OFF");
-    
+
     if (!PresenceBlocker && !BlockTriggers) {
       _logUsermodHourEffect("[MULTI-PRESENCE] Triggering presence/lux handler");
       handlePresenceLuxTrigger();
@@ -178,6 +179,7 @@ void UsermodHourEffect::handleSimpleMultiTopicPresence(const String& topics, con
     }
   } else {
     _logUsermodHourEffect("[MULTI-PRESENCE] Combined presence unchanged: %s", presenceValue ? "ON" : "OFF");
+    reconcilePresenceLed();
   }
 }
 
@@ -228,8 +230,8 @@ void UsermodHourEffect::handleSimpleMultiTopicLux(const String& topics, const ch
         _logUsermodHourEffect("[MULTI-LUX] Simple numeric payload: %.1f", newLuxValue);
       }
       
-      // Check if lux value actually changed (use threshold of 0.5 to avoid float precision issues)
-      if (abs(newLuxValue - luxValue) < 0.5) {
+      // Check if lux value actually changed (deadband to ignore normal sensor jitter)
+      if (abs(newLuxValue - luxValue) < LUX_CHANGE_DELTA) {
         _logUsermodHourEffect("[MULTI-LUX] Lux value unchanged (%.1f), ignoring", luxValue);
         return;
       }
@@ -279,6 +281,42 @@ void UsermodHourEffect::onStateChange(uint8_t mode) {
     if (isOn != wasOn) {
       _logUsermodHourEffect("[STATE-CHANGE] ON/OFF state changed, controlling MQTT lamps: %s", isOn ? "ON" : "OFF");
       controlMqttLamps(isOn);
+      if (isOn && !NightMode && !NotHome) {
+        // External turn-on (e.g. HA): clear the manual-off override so presence
+        // can drive the LEDs normally again, and re-enable SSDR/Nixie in case
+        // presence-off disabled them.
+        manualOffOverride = false;
+        #ifdef USERMOD_SSDR
+          if (ssdr) {
+            ssdr->disableOutputFunction(false);
+            _logUsermodHourEffect("[STATE-CHANGE] External ON - re-enabled SSDR output");
+          }
+        #endif
+        #ifdef USERMOD_NIXIECLOCK
+          if (nixie) {
+            nixie->setNixieMainPower(false);
+            _logUsermodHourEffect("[STATE-CHANGE] External ON - re-enabled Nixie output");
+          }
+        #endif
+      } else if (!isOn) {
+        // External turn-off (e.g. HA): remember this was a manual override so
+        // reconcilePresenceLed() won't immediately switch the LEDs back on
+        // while presence is still (or still evaluated as) TRUE, and disable
+        // SSDR/Nixie output, consistent with motion-off.
+        manualOffOverride = true;
+        #ifdef USERMOD_SSDR
+          if (ssdr) {
+            ssdr->disableOutputFunction(true);
+            _logUsermodHourEffect("[STATE-CHANGE] External OFF - disabled SSDR output");
+          }
+        #endif
+        #ifdef USERMOD_NIXIECLOCK
+          if (nixie) {
+            nixie->setNixieMainPower(true);
+            _logUsermodHourEffect("[STATE-CHANGE] External OFF - disabled Nixie output");
+          }
+        #endif
+      }
     } else {
       _logUsermodHourEffect("[STATE-CHANGE] ON/OFF state unchanged, no MQTT lamp control needed");
     }
@@ -562,6 +600,32 @@ void UsermodHourEffect::handlePresenceLuxTrigger() {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// reconcilePresenceLed: handlePresenceLuxTrigger() (and therefore _SetLedsOn)
+// normally only runs when the evaluated presence value actually flips. If the
+// LEDs get turned off through some other path while presence stays
+// continuously TRUE - a manual toggle via the app/HA, another usermod/preset
+// setting bri directly, or a transition that arrived while BlockTriggers /
+// PresenceBlocker was active and got swallowed - no future "presence still
+// true" MQTT message will ever retrigger _SetLedsOn(true), since the
+// aggregate value never changes again. Every sensor-update call site treats
+// "unchanged" as "nothing to do". Call this from those unchanged-branches to
+// catch and correct that mismatch: if presence is true, LEDs are off, and
+// nothing is currently blocking triggers, re-run the trigger so it self-heals.
+///////////////////////////////////////////////////////////////////////////////
+void UsermodHourEffect::reconcilePresenceLed() {
+  if (!presenceValue || bri != 0) return; // nothing to reconcile
+  if (PresenceBlocker || BlockTriggers || NotHome) return;
+  if (NightMode && !enablePresenceDuringNightMode) return;
+  if (manualOffOverride) {
+    _logUsermodHourEffect("[RECONCILE] Presence TRUE but LEDs OFF - skipping, user turned them off manually (manualOffOverride)");
+    return;
+  }
+
+  _logUsermodHourEffect("[RECONCILE] Presence TRUE but LEDs OFF (bri=0) with no reported change - re-triggering ON");
+  handlePresenceLuxTrigger();
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // Helper method to validate hour values
 ///////////////////////////////////////////////////////////////////////////////
 void UsermodHourEffect::validateHourValues() {
@@ -663,7 +727,9 @@ void UsermodHourEffect::checkInputPin() {
     
     // Treat input activation as presence detection
     presenceValue = inputActive;
-    
+    manualOffOverride = false; // a genuine presence transition supersedes any manual override
+
+
     _logUsermodHourEffect("[INPUT-PIN] Presence value updated from input pin: %d", presenceValue);
     
     _logUsermodHourEffect("[INPUT-PIN] Current system state: NightMode=%d, NotHome=%d, PresenceBlocker=%d, bri=%d", 
@@ -849,10 +915,17 @@ void UsermodHourEffect::onMqttConnect(bool sessionPresent) {
       }
     }
 
-    activeResetDelayMs = RESET_DELAY_MS;
-    resetScheduledTime = millis();
-    ResetEffect = true;
-    _logUsermodHourEffect("[MQTT-CONNECT] MQTT setup complete, effect reset scheduled for %lu ms from now", RESET_DELAY_MS);
+    // Arm the stale-message guard only when no effect is already running.
+    // If ResetEffect is already true an effect timer is active; resetting
+    // resetScheduledTime would extend the effect beyond its intended duration.
+    if (!ResetEffect) {
+      activeResetDelayMs = RESET_DELAY_MS;
+      resetScheduledTime = millis();
+      ResetEffect = true;
+      _logUsermodHourEffect("[MQTT-CONNECT] MQTT setup complete, stale-message guard armed for %lu ms", RESET_DELAY_MS);
+    } else {
+      _logUsermodHourEffect("[MQTT-CONNECT] MQTT setup complete, effect already running — existing guard preserved");
+    }
   }
 #endif
 }
@@ -863,8 +936,13 @@ void UsermodHourEffect::onMqttConnect(bool sessionPresent) {
 bool UsermodHourEffect::isTimeMatch(int targetHour) {
   bool result = (hour(localTime) == targetHour && minute(localTime) == 0 && second(localTime) == 0);
   if (result) {
-    _logUsermodHourEffect("[TIME-MATCH] Time match for hour %d: %02d:%02d:%02d", 
-                          targetHour, hour(localTime), minute(localTime), second(localTime));
+    static int lastLoggedKey = -1;
+    int key = day(localTime) * 100 + targetHour;
+    if (lastLoggedKey != key) {
+      lastLoggedKey = key;
+      _logUsermodHourEffect("[TIME-MATCH] Time match for hour %d: %02d:%02d:%02d",
+                            targetHour, hour(localTime), minute(localTime), second(localTime));
+    }
   }
   return result;
 }
@@ -1140,7 +1218,7 @@ void UsermodHourEffect::loop() {
 
       if (!shouldRunEffect) {
         lastEffectTriggerHour = hour(localTime); // Mark as processed
-        _logUsermodHourEffect("[LOOP] Skipping hourly effect at %02d:00:00 - trigger mode %d active and LEDs are OFF (bri=%d)", 
+        _logUsermodHourEffect("[LOOP] Skipping hourly effect at %02d:00:00 - trigger mode %d active and LEDs are OFF (bri=%d)",
                              hour(localTime), triggerMode, bri);
       } else {
         // CRITICAL FIX: Check if we're already in effect mode
@@ -1157,8 +1235,12 @@ void UsermodHourEffect::loop() {
 
           _BackupCurrentLedState();
 
-          // Apply the effect settings
-          applyEffectSettings(255, 255, 255, 255, GotEffect);
+          // Apply the effect settings.  Pass notify=false: each synced device
+          // triggers its own hourly effect independently via NTP, so we must not
+          // broadcast this state change via UDP or we will corrupt the backups on
+          // the other devices (they haven't backed up yet, or will receive our
+          // effect state as their "normal" state to restore to).
+          applyEffectSettings(255, 255, 255, 255, GotEffect, false);
 
           // Schedule reset after 10 seconds
           activeResetDelayMs = RESET_DELAY_MS;
@@ -1199,7 +1281,7 @@ void UsermodHourEffect::loop() {
 // applyEffectSettings: Apply color and effect settings to the main segment
 // and all active, selected segments.
 ///////////////////////////////////////////////////////////////////////////////
-void UsermodHourEffect::applyEffectSettings(uint8_t r, uint8_t g, uint8_t b, uint8_t w, uint8_t effectMode) {
+void UsermodHourEffect::applyEffectSettings(uint8_t r, uint8_t g, uint8_t b, uint8_t w, uint8_t effectMode, bool notify) {
   _logUsermodHourEffect("[APPLY-EFFECT] Starting: r=%d, g=%d, b=%d, w=%d, mode=%d", r, g, b, w, effectMode);
   
   // Set flag to indicate this is an internal state change
@@ -1255,16 +1337,23 @@ void UsermodHourEffect::applyEffectSettings(uint8_t r, uint8_t g, uint8_t b, uin
   _logUsermodHourEffect("[APPLY-EFFECT] Applied to %d segments total (out of %d configured)", segmentCount, segCount);
   
   NightNothomeTrigger();
-  
-  // Notify about color/effect changes BEFORE turning on LEDs
+
+  // Notify about color/effect changes AFTER _SetLedsOn so the stateUpdated call
+  // sees the correct bri value.
+  // Use NO_NOTIFY when called from the hourly effect so the effect state is not
+  // propagated via UDP to synced devices.  They independently trigger their own
+  // hourly effect via NTP.  Sending DIRECT_CHANGE here caused all three synced
+  // lamps to contaminate each other's backups → all got stuck in the effect state.
   stateChanged = true;
-  stateUpdated(CALL_MODE_DIRECT_CHANGE);
-  _logUsermodHourEffect("[APPLY-EFFECT] Color/effect changes applied");
-  
-  // Now turn on LEDs
-  _SetLedsOn(true);
-  
-  // Reset flag
+  stateUpdated(notify ? CALL_MODE_DIRECT_CHANGE : CALL_MODE_NO_NOTIFY);
+  _logUsermodHourEffect("[APPLY-EFFECT] Color/effect changes applied (notify=%d)", notify);
+
+  // Turn LEDs on first so that bri reflects the actual value (if bri was 0,
+  // _SetLedsOn sets it to briLast).  Pass callStateUpdate=false — we call
+  // stateUpdated ourselves below with the right call mode.
+  // Note: _SetLedsOn always resets internalStateChange to false at its end —
+  // re-set it after the call.
+  _SetLedsOn(true, false);
   internalStateChange = false;
   _logUsermodHourEffect("[APPLY-EFFECT] Set internalStateChange=false, completed");
 }
@@ -1297,7 +1386,7 @@ bool UsermodHourEffect::isTopicMatch(const char* topic, const char* suffix) cons
 }
 
 bool UsermodHourEffect::parseNotificationEffectPayload(const String& payload, uint8_t& r, uint8_t& g, uint8_t& b,
-                                                     uint8_t& w, uint8_t& effectMode, unsigned long& durationMs, String& targetDevice) {
+                                                     uint8_t& w, uint8_t& effectMode, unsigned long& durationMs, String& targetDevice, time_t& msgTimestamp) {
   String trimmed = payload;
   trimmed.trim();
 
@@ -1353,8 +1442,12 @@ bool UsermodHourEffect::parseNotificationEffectPayload(const String& payload, ui
   unsigned long parsedDuration = doc["durationMs"] | doc["duration"] | durationMs;
   durationMs = constrain(parsedDuration, 100UL, 600000UL);
 
-  _logUsermodHourEffect("[NOTIFICATION-EFFECT] Parsed payload: rgbw=(%d,%d,%d,%d) effect=%d speed=%d intensity=%d palette=%d duration=%lu target=%s",
-                        r, g, b, w, effectMode, effectSpeed, effectIntensity, pal, durationMs, targetDevice.c_str());
+  // Optional Unix timestamp (seconds). Used by the caller to detect stale
+  // retained MQTT messages so they are not replayed after reconnect.
+  msgTimestamp = (time_t)(doc["timestamp"] | (unsigned long)0);
+
+  _logUsermodHourEffect("[NOTIFICATION-EFFECT] Parsed payload: rgbw=(%d,%d,%d,%d) effect=%d speed=%d intensity=%d palette=%d duration=%lu target=%s timestamp=%lu",
+                        r, g, b, w, effectMode, effectSpeed, effectIntensity, pal, durationMs, targetDevice.c_str(), (unsigned long)msgTimestamp);
   return true;
 }
 
@@ -1549,10 +1642,24 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
     uint8_t effectMode = 1;
     unsigned long durationMs = RESET_DELAY_MS;
     String targetDevice = "";
+    time_t msgTimestamp = 0;
 
-    if (!parseNotificationEffectPayload(payloadString, r, g, b, w, effectMode, durationMs, targetDevice)) {
+    if (!parseNotificationEffectPayload(payloadString, r, g, b, w, effectMode, durationMs, targetDevice, msgTimestamp)) {
       _logUsermodHourEffect("[MQTT-MSG] Notification payload ignored (invalid)");
       return true;
+    }
+
+    // Reject stale retained messages so effects are not replayed after reconnect.
+    // A message is stale when its own durationMs has already elapsed since it
+    // was sent. Only checked when the payload carries a timestamp AND the device
+    // has a valid NTP time.
+    if (msgTimestamp > 0 && isReasonableTimestamp(localTime)) {
+      long age    = (long)(localTime - msgTimestamp);
+      long maxAge = (long)(durationMs / 1000UL);
+      if (age > maxAge) {
+        _logUsermodHourEffect("[MQTT-MSG] Notification effect stale (age=%lds > maxAge=%lds), ignoring retained message", age, maxAge);
+        return true;
+      }
     }
 
     if (!matchesNotificationTarget(targetDevice)) {
@@ -1589,22 +1696,34 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
 
     if (isPresenceTopic) {
       _logUsermodHourEffect("[MQTT-MSG] Processing advanced presence sensor");
-      updateSensorState(presenceConfig, topic, payload);
+      bool freshMotion = updateSensorState(presenceConfig, topic, payload);
       bool newPresenceValue = evaluatePresenceState(presenceConfig);
+
+      if (freshMotion && manualOffOverride) {
+        // A sensor just went FALSE->TRUE. The aggregate presence value may
+        // have stayed latched TRUE the whole time (e.g. logic_false requires
+        // ALL sensors clear, so one lingering sensor keeps it pinned) and
+        // therefore never "changed" - but this rising edge is unambiguous
+        // proof someone is back, so cancel the manual-off override here too.
+        manualOffOverride = false;
+        _logUsermodHourEffect("[MQTT-MSG] Fresh motion detected - clearing manualOffOverride");
+      }
 
       if (newPresenceValue != presenceValue) {
         presenceValue = newPresenceValue;
+        manualOffOverride = false; // a genuine presence transition supersedes any manual override
         _logUsermodHourEffect("[MQTT-MSG] Presence CHANGED (advanced): %d", presenceValue);
         if (!PresenceBlocker && !BlockTriggers) {
           handlePresenceLuxTrigger();
         }
       } else {
         _logUsermodHourEffect("[MQTT-MSG] Presence unchanged (advanced): %d", presenceValue);
+        reconcilePresenceLed();
       }
       return true;
     }
   }
- 
+
   // Simple presence mode
   if (useSimplePresence && !MqttPresence.isEmpty()) {
     // Check if this is a multi-topic configuration
@@ -1621,7 +1740,7 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
       bool newPresenceValue;
       float newLuxValue = luxValue;
       bool luxFound = false;
-      
+
       if (payloadString.startsWith("{")) {
         DynamicJsonDocument doc(512);
         DeserializationError error = deserializeJson(doc, payload);
@@ -1630,7 +1749,6 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
           return false;
         }
         newPresenceValue = doc["presence"].as<bool>();
-        
         if (doc.containsKey("illuminance")) {
           newLuxValue = doc["illuminance"].as<float>();
           luxFound = true;
@@ -1643,7 +1761,7 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
 
       // Check if values actually changed
       bool presenceChanged = (newPresenceValue != presenceValue);
-      bool luxChanged = luxFound && (abs(newLuxValue - luxValue) >= 0.5);
+      bool luxChanged = luxFound && (abs(newLuxValue - luxValue) >= LUX_CHANGE_DELTA);
 
       if (presenceChanged || luxChanged) {
         if (luxChanged) {
@@ -1652,14 +1770,15 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
         }
         if (presenceChanged) {
           presenceValue = newPresenceValue;
+          manualOffOverride = false; // a genuine presence transition supersedes any manual override
           _logUsermodHourEffect("[MQTT-MSG] Presence CHANGED: %d", presenceValue);
         }
-
         if (!PresenceBlocker && !BlockTriggers) {
           handlePresenceLuxTrigger();
         }
       } else {
         _logUsermodHourEffect("[MQTT-MSG] Presence/lux values unchanged, ignoring");
+        reconcilePresenceLed();
       }
       return true;
     }
@@ -1681,7 +1800,7 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
       for (const auto& sensor : luxConfig.sensors) {
         if (sensor.currentState) {
           float newLuxValue = extractLuxValue(sensor, payloadString);
-          if (abs(newLuxValue - luxValue) >= 0.5) {
+          if (abs(newLuxValue - luxValue) >= LUX_CHANGE_DELTA) {
             luxValue = newLuxValue;
             _logUsermodHourEffect("[MQTT-MSG] Lux CHANGED (advanced): %.1f", luxValue);
             if (!PresenceBlocker && !BlockTriggers) {
@@ -1736,6 +1855,7 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
           bool newPresenceValue = doc["presence"].as<bool>();
           if (newPresenceValue != presenceValue) {
             presenceValue = newPresenceValue;
+            manualOffOverride = false; // a genuine presence transition supersedes any manual override
             _logUsermodHourEffect("[MQTT-MSG] Presence CHANGED from lux message: %d", presenceValue);
           }
         }
@@ -1745,7 +1865,7 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
       }
       
       // Check if lux actually changed
-      if (abs(newLuxValue - luxValue) >= 0.5) {
+      if (abs(newLuxValue - luxValue) >= LUX_CHANGE_DELTA) {
         luxValue = newLuxValue;
         _logUsermodHourEffect("[MQTT-MSG] Lux CHANGED: %.1f", luxValue);
         
@@ -1810,7 +1930,7 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
 // _SetLedsOn: Turn LEDs on/off by adjusting brightness. Checks with the
 // NixieClock usermod if available.
 ///////////////////////////////////////////////////////////////////////////////
-void UsermodHourEffect::_SetLedsOn(bool state) {
+void UsermodHourEffect::_SetLedsOn(bool state, bool callStateUpdate) {
   #ifdef USERMOD_NIXIECLOCK
     if (nixie) {
       NixieLed = nixie->getLedEnabled();
@@ -1833,7 +1953,9 @@ void UsermodHourEffect::_SetLedsOn(bool state) {
   
   // Set flag to indicate this is an internal state change
   internalStateChange = true;
-  
+
+  bool brightnessChanged = false;
+
   if (state) {
     // Restore brightness if it is currently off.
     if (bri == 0) {
@@ -1843,6 +1965,7 @@ void UsermodHourEffect::_SetLedsOn(bool state) {
       applyFinalBri();
       lastBrightness = bri;
       controlMqttLamps(true);
+      brightnessChanged = true;
     } else {
       _logUsermodHourEffect("[SET-LEDS] LEDs already ON (bri=%d), no action", bri);
     }
@@ -1856,14 +1979,24 @@ void UsermodHourEffect::_SetLedsOn(bool state) {
       applyFinalBri();
       lastBrightness = bri;
       controlMqttLamps(false);
+      brightnessChanged = true;
     } else {
       _logUsermodHourEffect("[SET-LEDS] LEDs already OFF (bri=%d), no action", bri);
     }
   }
-  
-  // Reset flag after a short delay to allow state changes to propagate
+
+  // Publish the new on/off state so MQTT clients (e.g. Home Assistant) are
+  // notified.  Without this call, applyFinalBri() only updates the hardware —
+  // WLED never calls publishMqtt(), so HA stays stuck on the old state.
+  // callStateUpdate=false is passed by applyEffectSettings, which calls
+  // stateUpdated itself after this function returns.
+  if (callStateUpdate && brightnessChanged) {
+    stateChanged = true;
+    stateUpdated(CALL_MODE_DIRECT_CHANGE);
+  }
+
   internalStateChange = false;
-  _logUsermodHourEffect("[SET-LEDS] Completed");
+  _logUsermodHourEffect("[SET-LEDS] Completed (brightnessChanged=%d, callStateUpdate=%d)", brightnessChanged, callStateUpdate);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1884,7 +2017,12 @@ void UsermodHourEffect::_BackupCurrentLedState() {
 
   // Backup global colors
   globalColorBackup.backup();
-  
+
+  // Always backup the main segment — applyEffectSettings() overwrites it
+  // unconditionally regardless of its selected state, so it must be
+  // captured separately to guarantee a full restore.
+  mainSegmentBackup.backup(strip.getMainSegment());
+
   // Backup each active, selected segment
   int backedUpSegments = 0;
   const uint8_t segCount = strip.getSegmentsNum();
@@ -1932,6 +2070,13 @@ void UsermodHourEffect::_RestoreLedState() {
   // Restore global colors FIRST
   globalColorBackup.restore();
 
+  // Always restore the main segment first
+  if (mainSegmentBackup.hasData) {
+    mainSegmentBackup.restore(strip.getMainSegment());
+    mainSegmentBackup.hasData = false;
+    _logUsermodHourEffect("[RESTORE-STATE] Main segment restored");
+  }
+
   // Restore each backed-up segment
   int restoredSegments = 0;
   const uint8_t segCount = strip.getSegmentsNum();
@@ -1943,7 +2088,7 @@ void UsermodHourEffect::_RestoreLedState() {
     restoredSegments++;
 
     _logUsermodHourEffect("[RESTORE-STATE] Segment %d restored: mode=%d, color0=%u, color1=%u, color2=%u",
-             i, segmentBackup[i].mode, segmentBackup[i].color[0], 
+             i, segmentBackup[i].mode, segmentBackup[i].color[0],
              segmentBackup[i].color[1], segmentBackup[i].color[2]);
   }
 
@@ -1954,10 +2099,14 @@ void UsermodHourEffect::_RestoreLedState() {
   bri = LastBriValue;
   lastBrightness = bri;
 
-  // Update display
+  // Update display.  Use NO_NOTIFY so the restored state is not broadcast via UDP
+  // to other synced devices.  Each device restores its own pre-effect state
+  // independently.  Broadcasting here caused "last UDP wins": whichever device
+  // finished restoring last would push its (possibly wrong) state onto all others,
+  // overwriting a correct restore that had just completed on another device.
   stateChanged = true;
-  stateUpdated(CALL_MODE_DIRECT_CHANGE);
-  _logUsermodHourEffect("[RESTORE-STATE] State updated (colors and effects restored)");
+  stateUpdated(CALL_MODE_NO_NOTIFY);
+  _logUsermodHourEffect("[RESTORE-STATE] State updated (colors and effects restored, no UDP notify)");
 
   // Clear backup data
   for (uint8_t i = 0; i < segCount; i++) {
@@ -2135,32 +2284,40 @@ float UsermodHourEffect::extractLuxValue(const MqttSensor& sensor, const String&
 ///////////////////////////////////////////////////////////////////////////////
 // Update sensor state in config when MQTT message received
 ///////////////////////////////////////////////////////////////////////////////
-void UsermodHourEffect::updateSensorState(SensorConfig& config, const char* topic, const char* payload) {
+// Returns true if the matched sensor just had a rising edge (FALSE -> TRUE).
+// Callers use this as a "fresh motion detected" signal that is independent of
+// whatever the config's combined logic_true/logic_false decides the
+// aggregate presence value should be (which can stay latched TRUE/FALSE
+// across a sensor's own transitions when other sensors keep it pinned).
+bool UsermodHourEffect::updateSensorState(SensorConfig& config, const char* topic, const char* payload) {
   String topicStr = String(topic);
   String payloadStr = String(payload);
-  
+
   _logUsermodHourEffect("[SENSOR-UPDATE] Received MQTT: topic='%s', payload='%s'", topic, payload);
-  
+
   for (auto& sensor : config.sensors) {
     if (topicStr.endsWith(sensor.topic) || topicStr.indexOf(sensor.topic) >= 0) {
       _logUsermodHourEffect("[SENSOR-UPDATE] Matched sensor '%s'", sensor.id.c_str());
-      
+
       bool newState = evaluateSensorState(sensor, payloadStr);
-      
+
       if (newState != sensor.currentState) {
+        bool oldState = sensor.currentState;
         sensor.currentState = newState;
-        _logUsermodHourEffect("[SENSOR-UPDATE] Sensor '%s' state CHANGED: %s -> %s", 
-          sensor.id.c_str(), 
-          !newState ? "FALSE" : "TRUE",
+        _logUsermodHourEffect("[SENSOR-UPDATE] Sensor '%s' state CHANGED: %s -> %s",
+          sensor.id.c_str(),
+          oldState ? "TRUE" : "FALSE",
           newState ? "TRUE" : "FALSE");
+        return newState && !oldState;
       } else {
-        _logUsermodHourEffect("[SENSOR-UPDATE] Sensor '%s' state unchanged: %s", 
-          sensor.id.c_str(), 
+        _logUsermodHourEffect("[SENSOR-UPDATE] Sensor '%s' state unchanged: %s",
+          sensor.id.c_str(),
           newState ? "TRUE" : "FALSE");
       }
       break;
     }
   }
+  return false;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -2967,10 +3124,7 @@ void UsermodHourEffect::appendConfigData() {
 	// Inject CSS for structured layout with textarea support
 	oappend(F("var s=document.createElement('style');s.innerHTML='"
 	  "#hour-effect-root{"
-		"border-top:2px solid #444;"
-		"border-bottom:2px solid #444;"
-		"padding:15px 0;"
-		"margin:15px auto;"
+		"width:100%;"
 		"display:flex;"
 		"flex-direction:column;"
 		"align-items:center"
@@ -2980,40 +3134,47 @@ void UsermodHourEffect::appendConfigData() {
 		"text-align:center"
 	  "}"
 	  "#hour-effect-root .he-group{"
-		"background:#222;"
+		"background:#1e1e1e;"
 		"border:1px solid #444;"
 		"border-radius:8px;"
-		"padding:15px;"
-		"margin:15px 0;"
-		"width:fit-content;"
-		"min-width:600px"
+		"padding:12px;"
+		"margin:8px 0;"
+		"width:100%;"
+		"box-sizing:border-box"
 	  "}"
 	  "#hour-effect-root .he-group-title{"
 		"font-weight:bold;"
 		"font-size:1.1em;"
 		"color:#fca;"
-		"margin-bottom:12px;"
-		"padding-bottom:8px;"
+		"margin-bottom:10px;"
+		"padding-bottom:6px;"
 		"border-bottom:1px solid #444;"
 		"white-space:nowrap"
 	  "}"
 	  "#hour-effect-root .he-row{"
 		"display:flex;"
 		"align-items:center;"
-		"margin:8px 0;"
-		"min-height:30px"
+		"margin:2px 0;"
+		"min-height:24px;"
+		"padding:4px 6px;"
+		"border-radius:4px"
+	  "}"
+	  "#hour-effect-root .he-row:nth-child(odd){"
+		"background:#2a2a2a"
 	  "}"
 	  "#hour-effect-root .he-label{"
-		"flex:0 0 350px;"
+		"flex:0 0 160px;"
 		"text-align:left;"
 		"color:#ddd;"
-		"padding-right:20px;"
-		"white-space:nowrap"
+		"padding-right:10px;"
+		"white-space:normal;"
+		"word-break:break-word"
 	  "}"
 	  "#hour-effect-root .he-input{"
 		"display:flex;"
 		"align-items:center;"
-		"flex:0 0 450px;"
+		"flex:1;"
+		"min-width:0;"
 		"text-align:left;"
 		"gap:8px;"
 	  "}"
@@ -3058,10 +3219,9 @@ void UsermodHourEffect::appendConfigData() {
 		"padding:3px 5px !important;"
 	  "}"
 	  "#hour-effect-root .he-input input[type=\"checkbox\"]{"
-		"margin:0 8px 0 0 !important;"
+		"margin:0 0 0 auto !important;"
 		"width:auto !important;"
-		"vertical-align:middle !important;"
-		"transform:none !important;"
+		"transform-origin:right center !important;"
 	  "}"
 	  "#hour-effect-root hr{"
 		"display:none !important"
@@ -3431,7 +3591,7 @@ EXAMPLE 1: Presence with OR logic (any sensor triggers presence)
   "sensors": [
     {
       "id": "kitchen_wave",
-      "topic": "zigbee2mqtt/Küche mWave",
+      "topic": "zigbee2mqtt/K�che mWave",
       "path": "presence",
       "on_values": "on,true,1"
     },
@@ -3489,7 +3649,7 @@ EXAMPLE 4: Blocker with multiple conditions
   "sensors": [
     {
       "id": "manual_switch",
-      "topic": "zigbee2mqtt/K�che Licht",
+      "topic": "zigbee2mqtt/K?che Licht",
       "path": "state_center",
       "on_values": "on,true,1"
     }

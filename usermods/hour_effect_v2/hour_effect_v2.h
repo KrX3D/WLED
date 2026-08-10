@@ -73,6 +73,14 @@
   #define MIN_3D_TRIGGER_MS 3000UL
 #endif
 
+// minimum lux delta (in lux) before a reading is treated as "changed" and
+// re-runs the presence/lux trigger logic. Raised from 0.5 to ignore normal
+// sensor jitter (e.g. 22 -> 17 -> 22 -> 19 -> 22) that would otherwise
+// re-evaluate and re-log on every MQTT message.
+#ifndef LUX_CHANGE_DELTA
+  #define LUX_CHANGE_DELTA 5.0f
+#endif
+
 // logging macro:
 #define _logUsermodHourEffect(fmt, ...) \
   DEBUG_PRINTF("[HourEffect] " fmt "\n", ##__VA_ARGS__)
@@ -215,6 +223,14 @@ private:
   unsigned long last3DTriggerTime = 0;
   int LastBriValue   = 300;     // Backup for brightness
 
+  // Set when the LEDs are turned off externally (e.g. via the Home Assistant
+  // WLED integration) while presence is still detected. Prevents
+  // reconcilePresenceLed() from immediately switching them back on and
+  // fighting the user's manual command. Cleared on the next external ON, or
+  // on a genuine presence transition (the room was actually left and
+  // re-entered).
+  bool manualOffOverride = false;
+
   // Nixie clock LED control flag (if NixieClock usermod is defined)
   bool NixieLed = true;
 
@@ -275,6 +291,7 @@ private:
   void handlePresenceChange();
   void handleLuxChange();
   void handlePresenceLuxTrigger();
+  void reconcilePresenceLed();
   void validateHourValues();
   void allocateInputPin();
   void deallocateInputPin();
@@ -289,7 +306,7 @@ private:
   void handleSimpleMultiTopicPresence(const String& topics, const char* topic, const char* payload);
   void handleSimpleMultiTopicLux(const String& topics, const char* topic, const char* payload);
   bool parseNotificationEffectPayload(const String& payload, uint8_t& r, uint8_t& g, uint8_t& b,
-                                      uint8_t& w, uint8_t& effectMode, unsigned long& durationMs, String& targetDevice);
+                                      uint8_t& w, uint8_t& effectMode, unsigned long& durationMs, String& targetDevice, time_t& msgTimestamp);
   bool matchesNotificationTarget(const String& targetDevice) const;
   
   // Helper methods for sensor management
@@ -297,7 +314,7 @@ private:
   bool evaluateLogicExpression(const String& expression, const SensorConfig& config);
   bool evaluatePresenceState(const SensorConfig& config);
   bool evaluateSensorState(const MqttSensor& sensor, const String& payload);
-  void updateSensorState(SensorConfig& config, const char* topic, const char* payload);
+  bool updateSensorState(SensorConfig& config, const char* topic, const char* payload);
   float extractLuxValue(const MqttSensor& sensor, const String& payload);
 
 public:
@@ -326,9 +343,9 @@ public:
   void publishMessage(const char* topicSuffix, const String& value);
   void setup() override;
   void loop() override;
-  void applyEffectSettings(uint8_t r, uint8_t g, uint8_t b, uint8_t w, uint8_t effectMode);
+  void applyEffectSettings(uint8_t r, uint8_t g, uint8_t b, uint8_t w, uint8_t effectMode, bool notify = true);
   bool onMqttMessage(char* topic, char* payload) override;
-  void _SetLedsOn(bool state);
+  void _SetLedsOn(bool state, bool callStateUpdate = true);
   void _BackupCurrentLedState();
   void _RestoreLedState();
   void addToConfig(JsonObject& root) override;
