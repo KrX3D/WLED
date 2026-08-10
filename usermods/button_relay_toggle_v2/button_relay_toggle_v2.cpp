@@ -28,6 +28,9 @@
 #ifndef RELAY_1_ACTIVE_LOW
   #define RELAY_1_ACTIVE_LOW false
 #endif
+#ifndef RELAY_1_BOOT_STATE
+  #define RELAY_1_BOOT_STATE 0  // 0=Default (feature disabled, original behavior), 1=On, 2=Off
+#endif
 
 // Group 2
 #ifndef BUTTON_2_PIN
@@ -41,6 +44,9 @@
 #endif
 #ifndef RELAY_2_ACTIVE_LOW
   #define RELAY_2_ACTIVE_LOW false
+#endif
+#ifndef RELAY_2_BOOT_STATE
+  #define RELAY_2_BOOT_STATE 0
 #endif
 
 // Group 3
@@ -56,6 +62,9 @@
 #ifndef RELAY_3_ACTIVE_LOW
   #define RELAY_3_ACTIVE_LOW false
 #endif
+#ifndef RELAY_3_BOOT_STATE
+  #define RELAY_3_BOOT_STATE 0
+#endif
 
 // Group 4
 #ifndef BUTTON_4_PIN
@@ -70,6 +79,9 @@
 #ifndef RELAY_4_ACTIVE_LOW
   #define RELAY_4_ACTIVE_LOW false
 #endif
+#ifndef RELAY_4_BOOT_STATE
+  #define RELAY_4_BOOT_STATE 0
+#endif
 
 //------------------------------------------------------------------------------
 // Usermod: Button Relay Toggle with Home Assistant discovery
@@ -79,6 +91,19 @@
 // used for publishing button and relay state changes and for incremental 
 // Home Assistant discovery.
 //------------------------------------------------------------------------------
+
+// Per-relay boot behavior.
+// Default = this feature is off; unchanged original behavior, which always
+//   drives the pin to its LOGICAL off level as defined by relay_active_low.
+//   "Logical off" is NOT guaranteed to mean "the light is physically off" -
+//   that depends entirely on relay_active_low matching your actual wiring.
+//   If Default doesn't power off what you expect, fix relay_active_low for
+//   that group rather than relying on On/Off to work around it (they use the
+//   same relay_active_low-relative logic, so a wrong setting affects them too).
+// On/Off = force the relay to that logical state on boot AND defend it against
+//   the next incoming MQTT /set command (e.g. a stale retained message
+//   redelivered right after subscribing), so it can't silently get undone.
+enum RelayBootState : uint8_t { RELAY_BOOT_DEFAULT = 0, RELAY_BOOT_ON = 1, RELAY_BOOT_OFF = 2 };
 
 class UsermodButtonRelayToggle : public Usermod {
   private:
@@ -115,9 +140,17 @@ class UsermodButtonRelayToggle : public Usermod {
     bool _pullUps[4]        = { BUTTON_1_PULLUP, BUTTON_2_PULLUP, BUTTON_3_PULLUP, BUTTON_4_PULLUP };
     int  _relayPins[4]      = { RELAY_1_PIN, RELAY_2_PIN, RELAY_3_PIN, RELAY_4_PIN };
     bool _activeLow[4]      = { RELAY_1_ACTIVE_LOW, RELAY_2_ACTIVE_LOW, RELAY_3_ACTIVE_LOW, RELAY_4_ACTIVE_LOW };
+    uint8_t _bootState[4]   = { RELAY_1_BOOT_STATE, RELAY_2_BOOT_STATE, RELAY_3_BOOT_STATE, RELAY_4_BOOT_STATE };
+
+    // True while the next MQTT /set command for that relay must be checked
+    // against _bootState[] instead of being applied as-is. Armed whenever a
+    // relay is (re)initialized with a non-Default boot state; consumed by
+    // the first /set message received afterwards (see onMqttMessage).
+    bool _bootOverridePending[4] = { false, false, false, false };
 
     int oldButtonPins[4];
     int oldRelayPins[4];
+    uint8_t oldBootState[4];
 
     // --- Home Assistant discovery state ---
     bool triggerHaDiscovery   		= false;
@@ -129,7 +162,34 @@ class UsermodButtonRelayToggle : public Usermod {
     inline void enable(bool e) { enabled = e; }
     inline bool isEnabled() { return enabled; }
 
-    //----------------------------------------------------------------------------  
+    ////////////////////////////////////////////////////////////////////////////////
+    // Drive a relay pin to its configured boot state (Default/On/Off).
+    // Default = feature off; preserves the original behavior of always driving
+    // the pin to its LOGICAL off level (relative to relay_active_low) - this is
+    // NOT necessarily "the light is physically off"; that depends on
+    // relay_active_low matching your wiring. On/Off use the same
+    // relay_active_low-relative logic, so get that setting right first.
+    // On/Off additionally arm _bootOverridePending so the next MQTT /set
+    // command can't silently undo them (e.g. a stale retained command
+    // redelivered right after subscribing) - see onMqttMessage.
+    ////////////////////////////////////////////////////////////////////////////////
+    void applyRelayBootState(uint8_t index) {
+      if (_relayPins[index] == -1) return;
+
+      bool desiredLogicalOn = (_bootState[index] == RELAY_BOOT_ON); // Default and Off both start at logical OFF
+      digitalWrite(_relayPins[index], _activeLow[index] ? !desiredLogicalOn : desiredLogicalOn);
+
+      _bootOverridePending[index] = (_bootState[index] != RELAY_BOOT_DEFAULT);
+
+      _logUsermodB_R_T("Relay %u boot state applied: %s logical %s (pin %d, activeLow=%d, overridePending=%d)",
+                        index + 1,
+                        _bootState[index] == RELAY_BOOT_DEFAULT ? "DEFAULT/feature-off ->" :
+                        _bootState[index] == RELAY_BOOT_ON      ? "ON forced ->"           : "OFF forced ->",
+                        desiredLogicalOn ? "ON" : "OFF",
+                        _relayPins[index], _activeLow[index], _bootOverridePending[index]);
+    }
+
+    //----------------------------------------------------------------------------
 	void deallocateAll() {
 		if (!initDone) return;
 		for (uint8_t i = 0; i < 4; i++) {
@@ -194,14 +254,14 @@ class UsermodButtonRelayToggle : public Usermod {
 	    if (_relayPins[i] != -1 && PinManager::allocatePin(_relayPins[i], true, PinOwner::UM_BUTTON_RELAY_TOGGLE)) {
 	      pinMode(_relayPins[i], OUTPUT);
 
-          // set the relay to a known OFF state at startup to avoid powering LEDs unintentionally
-          // If activeLow == true and logical OFF -> physical HIGH, else physical LOW.
-          digitalWrite(_relayPins[i], _activeLow[i] ? HIGH : LOW);
-          _logUsermodB_R_T("Initialized relay %u pin %d -> OFF (activeLow=%d)", i + 1, _relayPins[i], _activeLow[i]);
+          // Drive the relay to its configured boot state (Default=OFF, On, Off).
+          applyRelayBootState(i);
+          _logUsermodB_R_T("Initialized relay %u pin %d (activeLow=%d)", i + 1, _relayPins[i], _activeLow[i]);
 		}
 		// Save the initial configuration for later comparison
 		oldButtonPins[i] = _buttonPins[i];
 		oldRelayPins[i]  = _relayPins[i];
+		oldBootState[i]  = _bootState[i];
 	  }
 
 	  // ------------------------------------------------------------------
@@ -405,6 +465,8 @@ class UsermodButtonRelayToggle : public Usermod {
         processHassSensor(_relayPins[i] != -1, haDiscovery, i, "Relay", "pin", topic, "relay_pin", "sensor", "diagnostic");
         // Relay active low sensor
         processHassSensor(_relayPins[i] != -1, haDiscovery, i, "Relay", "active low", topic, "relay_active_low", "sensor", "diagnostic");
+        // Relay boot state sensor (0=Disabled/Default, 1=On, 2=Off)
+        processHassSensor(_relayPins[i] != -1, haDiscovery, i, "Relay", "boot state", topic, "relay_boot_state", "sensor", "diagnostic");
       }
     }
 
@@ -467,6 +529,7 @@ class UsermodButtonRelayToggle : public Usermod {
       group["button_pullup"] = _pullUps[index];
       group["relay_pin"] = _relayPins[index];
       group["relay_active_low"] = _activeLow[index];
+      group["relay_boot_state"] = _bootState[index]; // 0=Default(feature off) 1=On 2=Off - see RelayBootState
     }
 
     ////////////////////////////////////////////////////////////////////////////////
@@ -478,6 +541,8 @@ class UsermodButtonRelayToggle : public Usermod {
       configComplete &= getJsonValue(group["button_pin"], _buttonPins[index]);
       configComplete &= getJsonValue(group["relay_active_low"], _activeLow[index]);
       configComplete &= getJsonValue(group["button_pullup"], _pullUps[index]);
+      configComplete &= getJsonValue(group["relay_boot_state"], _bootState[index], (uint8_t)RELAY_BOOT_DEFAULT);
+      if (_bootState[index] > RELAY_BOOT_OFF) _bootState[index] = RELAY_BOOT_DEFAULT; // guard against bad/manual JSON edits
       return configComplete;
     }
 
@@ -665,6 +730,12 @@ class UsermodButtonRelayToggle : public Usermod {
 				bool relayState = _activeLow[i] ? !digitalRead(_relayPins[i]) : digitalRead(_relayPins[i]);
 				_logUsermodB_R_T("Relay group %d current state: %s", i + 1, relayState ? "ON" : "OFF");
 				publishMqtt("Relay", i + 1, relayState);
+				// Every (re)subscribe can have a stale retained /set command redelivered
+				// by the broker (e.g. HA still showing an old ON/OFF from before a
+				// settings save or reconnect) - arm the override so onMqttMessage checks
+				// that first command against the actual current state (or the forced
+				// boot state for On/Off) instead of blindly applying it.
+				_bootOverridePending[i] = true;
 				if(mqtt->subscribe(subscriptionTopic.c_str(), 0)){
 				  _logUsermodB_R_T("Successfully subscribed to topic: %s", subscriptionTopic.c_str());
 				} else {
@@ -728,9 +799,10 @@ class UsermodButtonRelayToggle : public Usermod {
 	  configComplete &= getJsonValue(top["ha_discovery"], haDiscovery);
 	  #endif
 
-	  // Backup previous pin assignments for comparison
+	  // Backup previous pin/boot-state assignments for comparison
       memcpy(oldButtonPins, _buttonPins, sizeof(_buttonPins));
       memcpy(oldRelayPins,  _relayPins,  sizeof(_relayPins));
+      memcpy(oldBootState,  _bootState,  sizeof(_bootState));
 
 	  // Read new configuration
 	  for (uint8_t i = 0; i < 4; i++) {
@@ -771,7 +843,7 @@ class UsermodButtonRelayToggle : public Usermod {
 			  _logUsermodB_R_T("Allocating relay pin %d for group %d...", _relayPins[i], i+1);
 			  if (PinManager::allocatePin(_relayPins[i], true, PinOwner::UM_BUTTON_RELAY_TOGGLE)) {
 				pinMode(_relayPins[i], OUTPUT);
-				digitalWrite(_relayPins[i], _activeLow[i] ? HIGH : LOW);
+				applyRelayBootState(i);
 				_logUsermodB_R_T("Successfully allocated relay pin %d (Active %s).", 
 							  _relayPins[i], _activeLow[i] ? "LOW" : "HIGH");
 			  } else {
@@ -844,7 +916,7 @@ class UsermodButtonRelayToggle : public Usermod {
 				_logUsermodB_R_T("Allocating new relay pin %d...", _relayPins[i]);
 				if (PinManager::allocatePin(_relayPins[i], true, PinOwner::UM_BUTTON_RELAY_TOGGLE)) {
 				  pinMode(_relayPins[i], OUTPUT);
-				  digitalWrite(_relayPins[i], _activeLow[i] ? HIGH : LOW);
+				  applyRelayBootState(i);
 				  _logUsermodB_R_T("Successfully allocated new relay pin %d (Active %s).", 
 								_relayPins[i], _activeLow[i] ? "LOW" : "HIGH");
 				} else {
@@ -855,9 +927,15 @@ class UsermodButtonRelayToggle : public Usermod {
 			  }
 			} else if (_relayPins[i] != -1) {
 			  // Same pin, ensure proper mode and maybe update active low status
-			  _logUsermodB_R_T("Relay pin %d unchanged. Ensuring proper mode as OUTPUT and Active %s.", 
+			  _logUsermodB_R_T("Relay pin %d unchanged. Ensuring proper mode as OUTPUT and Active %s.",
 							_relayPins[i], _activeLow[i] ? "LOW" : "HIGH");
 			  pinMode(_relayPins[i], OUTPUT);
+			  // If only the boot-state setting changed (pin/wiring untouched), apply
+			  // it immediately rather than waiting for the next physical reboot.
+			  if (oldBootState[i] != _bootState[i]) {
+				_logUsermodB_R_T("Relay %u boot state changed (%d -> %d), applying now.", i + 1, oldBootState[i], _bootState[i]);
+				applyRelayBootState(i);
+			  }
 			}
 		  }
 		}
@@ -945,15 +1023,49 @@ class UsermodButtonRelayToggle : public Usermod {
 		  ? !digitalRead(_relayPins[i])
 		  : digitalRead(_relayPins[i]);
 
-		// If it's already in the requested state, ignore to avoid loops
-		if (desiredOn == currentOn) {
+		// The first /set command received after any (re)subscribe is checked
+		// against the relay's actual CURRENT state instead of being applied
+		// blindly, because the broker redelivers retained commands on every
+		// subscribe - not just at boot, but also after every settings save
+		// (setupRelaySubscriptions runs again) and every MQTT reconnect. That
+		// stale command can silently override a manual/local relay state (e.g.
+		// HA still retaining "ON" from before you turned the light off, or
+		// relay_boot_state having just forced it Off at boot).
+		//
+		// This intentionally does NOT re-derive relay_boot_state here: that
+		// setting only decides what to physically drive at the moment of a
+		// genuine (re)init (cold boot, newly enabled, pin change, or the
+		// boot-state setting itself changing - see applyRelayBootState()). By
+		// the time any MQTT message can arrive, currentOn already reflects
+		// that. A plain settings save with nothing relevant changed must NOT
+		// re-force the relay to the configured boot value - it must keep
+		// whatever the relay is currently, legitimately doing and just make
+		// sure MQTT/HA reflect it correctly.
+		bool overrodeCommand = false;
+		if (_bootOverridePending[i]) {
+		  _bootOverridePending[i] = false; // only the first command after (re)subscribe is affected
+		  if (desiredOn != currentOn) {
+			_logUsermodB_R_T("Group %u: first /set after (re)subscribe disagrees with actual relay state (cmd=%s, actual=%s) - correcting MQTT instead of applying it",
+							  i+1, desiredOn?"ON":"OFF", currentOn?"ON":"OFF");
+			desiredOn = currentOn;
+			overrodeCommand = true;
+		  }
+		}
+
+		// If it's already in the requested state, ignore to avoid loops - unless
+		// we just overrode a conflicting command, in which case we still want to
+		// publish the corrected state so the broker/HA don't keep showing the
+		// stale value from the rejected command.
+		if (desiredOn == currentOn && !overrodeCommand) {
 		  _logUsermodB_R_T("Ignoring /set for group %u because already %s", i+1, desiredOn?"ON":"OFF");
 		  return true;
 		}
 
-		// Apply the new state
-		_logUsermodB_R_T("Applying /set for group %u → %s", i + 1, desiredOn ? "ON" : "OFF");
-		digitalWrite(_relayPins[i], _activeLow[i] ? !desiredOn : desiredOn);
+		// Apply the new state (only touch the pin if it actually needs to change)
+		if (desiredOn != currentOn) {
+		  _logUsermodB_R_T("Applying /set for group %u → %s", i + 1, desiredOn ? "ON" : "OFF");
+		  digitalWrite(_relayPins[i], _activeLow[i] ? !desiredOn : desiredOn);
+		}
 
 		// Publish state topic only (NOT the command/set topic — that would create an MQTT loop)
 		char stateTopic[128];
@@ -1011,7 +1123,7 @@ class UsermodButtonRelayToggle : public Usermod {
         }
         _logUsermodB_R_T("Publishing usermod config to MQTT...");
         
-        StaticJsonDocument<512> doc;
+        StaticJsonDocument<640> doc;
         doc["enabled"] = enabled;
         doc["homeassistant_discovery"] = haDiscovery;
         for (uint8_t i = 0; i < 4; i++) {
@@ -1020,10 +1132,11 @@ class UsermodButtonRelayToggle : public Usermod {
           group["button_pullup"] = _pullUps[i];
           group["relay_pin"] = _relayPins[i];
           group["relay_active_low"] = _activeLow[i];
-          _logUsermodB_R_T("Group %s: Button pin=%d, Pullup=%d, Relay pin=%d, Active low=%d",
-                       _groups[i], _buttonPins[i], _pullUps[i], _relayPins[i], _activeLow[i]);
+          group["relay_boot_state"] = _bootState[i];
+          _logUsermodB_R_T("Group %s: Button pin=%d, Pullup=%d, Relay pin=%d, Active low=%d, Boot state=%d",
+                       _groups[i], _buttonPins[i], _pullUps[i], _relayPins[i], _activeLow[i], _bootState[i]);
         }
-        char buffer[512]; //Payload size: 404, Buffer size: 512  //CommentOut for ArduinoJson 7
+        char buffer[640]; //Payload size grows with relay_boot_state field; bumped from 512 for headroom
         size_t payload_size = serializeJson(doc, buffer, sizeof(buffer));
         char topic[64];
         snprintf_P(topic, sizeof(topic), "%s/Button_Relay_Toggle/config", mqttDeviceTopic);
@@ -1031,6 +1144,23 @@ class UsermodButtonRelayToggle : public Usermod {
         _logUsermodB_R_T("Publishing config to topic: %s, Payload size: %d", topic, payload_size);
         publishMqttMessage(topic, buffer);
       #endif
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Replace the plain number input for relay_boot_state with a dropdown
+    // (Disabled/On/Off) on the usermod settings page, for each group.
+    ////////////////////////////////////////////////////////////////////////////////
+    void appendConfigData() override {
+      for (uint8_t i = 0; i < 4; i++) {
+        String um = String("Button_Relay_Toggle:") + _groups[i];
+        oappend(String("dd=addDropdown('" + um + "','relay_boot_state');").c_str());
+        oappend(String("addOption(dd,'Disabled (feature off, original behavior)',0" +
+                        String(_bootState[i] == RELAY_BOOT_DEFAULT ? ", true);" : ");")).c_str());
+        oappend(String("addOption(dd,'On',1" +
+                        String(_bootState[i] == RELAY_BOOT_ON ? ", true);" : ");")).c_str());
+        oappend(String("addOption(dd,'Off',2" +
+                        String(_bootState[i] == RELAY_BOOT_OFF ? ", true);" : ");")).c_str());
+      }
     }
 
     ////////////////////////////////////////////////////////////////////////////////

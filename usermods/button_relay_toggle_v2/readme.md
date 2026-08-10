@@ -13,6 +13,9 @@ Manages up to **4 independent button/relay groups**. A short press on a hardware
 - Home Assistant MQTT discovery (optional)
 - Relay command subscription (`/Relay/set`) for remote control from HA or any MQTT client
 - Startup suppression: ignores button events for 1 second after boot to avoid false triggers
+- Per-relay boot state: Default (feature disabled, original behavior), On, or Off — and the forced
+  state defends itself against the first conflicting MQTT command received afterwards (e.g. a
+  stale retained `/set` message), correcting the published state to match
 
 ---
 
@@ -25,13 +28,13 @@ Each group consists of:
 ### Wiring (typical, active-high relay, pullup button)
 
 ```
-Button:  GPIO ──[button]── GND        (INPUT_PULLUP, pressed = LOW)
-Relay:   GPIO ──[relay IN]── ...      (HIGH = relay ON)
+Button:  GPIO --[button]-- GND        (INPUT_PULLUP, pressed = LOW)
+Relay:   GPIO --[relay IN]-- ...      (HIGH = relay ON)
 ```
 
 For active-low relay modules (common opto-isolated boards):
 ```
-Relay:   GPIO ──[relay IN]── ...      (LOW = relay ON → set active_low = true)
+Relay:   GPIO --[relay IN]-- ...      (LOW = relay ON ? set active_low = true)
 ```
 
 ---
@@ -81,6 +84,50 @@ Per group (group_1 … group_4):
 | `button_pullup` | bool | `true` | Enable internal pull-up on button pin |
 | `relay_pin` | int | `-1` | GPIO for the relay/MOSFET (-1 = disabled) |
 | `relay_active_low` | bool | `false` | Relay is ON when GPIO is LOW |
+| `relay_boot_state` | int | `0` | Boot behavior: `0`=Default (feature disabled, original behavior), `1`=On, `2`=Off |
+
+---
+
+## Relay boot state
+
+Each relay independently chooses what it does when the ESP boots (or when this setting is
+saved without a full reboot):
+
+- **Default (`0`)** — this feature is off; unchanged from before it existed. The relay is always
+  driven to its **logical OFF** level, i.e. whatever `relay_active_low` says OFF is. This is
+  *not* automatically "the light is physically off" — it only matches your expectation if
+  `relay_active_low` (and the pullup/wiring it goes with) is set correctly for your hardware. If
+  Default ends up powering something on that you expect to be off, the fix is to correct
+  `relay_active_low` for that group, not to avoid Default.
+- **On (`1`)** — the relay is forced to its logical ON state at boot.
+- **Off (`2`)** — the relay is forced to its logical OFF state at boot (same physical result as
+  Default given the same `relay_active_low`, but explicit and, unlike Default, also defended
+  against MQTT as described below).
+
+On and Off use the exact same `relay_active_low`-relative logic as everything else in this
+usermod (button toggle, MQTT `/set`) — they don't bypass it. Get `relay_active_low` right for
+your wiring first; On/Off then reliably mean what they say.
+
+Every relay defends itself against the *next* incoming `.../Relay/set` command after any
+(re)subscribe — this happens at boot, on every MQTT reconnect, and on every settings-page save
+(each one re-subscribes to `/set`, and the broker redelivers any retained command on every
+subscribe, not just the first one ever). That first command is checked against the relay's
+**actual current state** — never against the configured `relay_boot_state` directly. If it
+disagrees, it's ignored and the corrected (actual) state is republished to `.../Relay/N` so any
+client (e.g. Home Assistant still retaining a stale ON/OFF) gets fixed too.
+
+`relay_boot_state` only decides what to physically drive at the moment of a genuine
+(re)initialization: cold boot, the usermod being newly enabled, the relay's GPIO being
+reassigned, or the boot-state setting itself being changed. A plain settings save that doesn't
+touch any of that leaves the relay exactly as it is — including if it was toggled on since boot
+by the button or by HA — and only corrects MQTT/HA to match reality, it never forces the relay
+back to the configured boot value on every save.
+
+Only the first command after each (re)subscribe is checked this way — normal MQTT control
+resumes immediately after. The physical button is never affected by this and can always toggle
+the relay.
+
+The setting is exposed as a dropdown (Disabled/On/Off) on the usermod settings page.
 
 ---
 
@@ -141,5 +188,6 @@ The relay switch in HA uses:
 | Double-trigger on button press | Mechanical bounce lasting > 500 ms; try a different button or add a hardware capacitor |
 | Relay turns on/off rapidly in a loop | Old retained `/Relay/set` messages on the broker; clear retained messages or ensure only external clients publish to `/set` |
 | HA switch shows "unavailable" | MQTT not connected, or HA discovery not enabled |
-| Relay state resets to OFF on reboot | Expected — relay is always initialized to OFF at startup for safety |
+| Relay resets to a state you didn't expect on reboot | Expected if `relay_boot_state` is Default for that group - it drives logical OFF, not necessarily "physically off"; check `relay_active_low` matches your wiring - see "Relay boot state" above |
+| Forced boot On/Off gets overridden by MQTT right after boot | Should not happen - the override only protects the *first* command after boot; if HA/automations send a second conflicting command afterward, it will be applied normally |
 | Button triggers immediately after boot | Expected behavior if button is held at power-on; startup suppression (1 s) prevents most cases |
