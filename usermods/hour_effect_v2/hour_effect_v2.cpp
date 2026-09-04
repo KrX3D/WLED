@@ -742,6 +742,10 @@ void UsermodHourEffect::checkInputPin() {
     } else {
       _logUsermodHourEffect("[INPUT-PIN] Blocker ACTIVE, skipping trigger");
     }
+  } else {
+    // No change on this poll - self-heal if presence is still active but the
+    // LEDs ended up off (e.g. manual toggle), same as the MQTT presence paths.
+    reconcilePresenceLed();
   }
 }
 
@@ -1338,6 +1342,17 @@ void UsermodHourEffect::applyEffectSettings(uint8_t r, uint8_t g, uint8_t b, uin
   
   NightNothomeTrigger();
 
+  // Turn LEDs on first so that bri reflects the actual value (if bri was 0,
+  // _SetLedsOn sets it to briLast) BEFORE we notify anyone about the change.
+  // Pass callStateUpdate=false — we call stateUpdated ourselves below with the
+  // right call mode. _SetLedsOn always resets internalStateChange to false at
+  // its own end, so re-set it before calling stateUpdated — otherwise the
+  // onStateChange() call triggered by stateUpdated() below would see
+  // internalStateChange=false and misinterpret our own notification as an
+  // external brightness change.
+  _SetLedsOn(true, false);
+  internalStateChange = true;
+
   // Notify about color/effect changes AFTER _SetLedsOn so the stateUpdated call
   // sees the correct bri value.
   // Use NO_NOTIFY when called from the hourly effect so the effect state is not
@@ -1348,12 +1363,6 @@ void UsermodHourEffect::applyEffectSettings(uint8_t r, uint8_t g, uint8_t b, uin
   stateUpdated(notify ? CALL_MODE_DIRECT_CHANGE : CALL_MODE_NO_NOTIFY);
   _logUsermodHourEffect("[APPLY-EFFECT] Color/effect changes applied (notify=%d)", notify);
 
-  // Turn LEDs on first so that bri reflects the actual value (if bri was 0,
-  // _SetLedsOn sets it to briLast).  Pass callStateUpdate=false — we call
-  // stateUpdated ourselves below with the right call mode.
-  // Note: _SetLedsOn always resets internalStateChange to false at its end —
-  // re-set it after the call.
-  _SetLedsOn(true, false);
   internalStateChange = false;
   _logUsermodHourEffect("[APPLY-EFFECT] Set internalStateChange=false, completed");
 }
@@ -1653,8 +1662,12 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
     // A message is stale when its own durationMs has already elapsed since it
     // was sent. Only checked when the payload carries a timestamp AND the device
     // has a valid NTP time.
-    if (msgTimestamp > 0 && isReasonableTimestamp(localTime)) {
-      long age    = (long)(localTime - msgTimestamp);
+    // NOTE: msgTimestamp is a real UTC Unix timestamp (e.g. HA's as_timestamp(now())).
+    // localTime is timezone/DST-adjusted (see updateLocalTime() in ntp.cpp) and must
+    // NOT be compared against it directly - use toki.second() (raw NTP UTC seconds).
+    time_t nowUtc = (time_t)toki.second();
+    if (msgTimestamp > 0 && isReasonableTimestamp(nowUtc)) {
+      long age    = (long)(nowUtc - msgTimestamp);
       long maxAge = (long)(durationMs / 1000UL);
       if (age > maxAge) {
         _logUsermodHourEffect("[MQTT-MSG] Notification effect stale (age=%lds > maxAge=%lds), ignoring retained message", age, maxAge);
@@ -3591,7 +3604,7 @@ EXAMPLE 1: Presence with OR logic (any sensor triggers presence)
   "sensors": [
     {
       "id": "kitchen_wave",
-      "topic": "zigbee2mqtt/K�che mWave",
+      "topic": "zigbee2mqtt/Küche mWave",
       "path": "presence",
       "on_values": "on,true,1"
     },
@@ -3649,7 +3662,7 @@ EXAMPLE 4: Blocker with multiple conditions
   "sensors": [
     {
       "id": "manual_switch",
-      "topic": "zigbee2mqtt/K?che Licht",
+      "topic": "zigbee2mqtt/Küche Licht",
       "path": "state_center",
       "on_values": "on,true,1"
     }
