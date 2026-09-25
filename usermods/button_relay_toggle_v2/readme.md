@@ -34,7 +34,7 @@ Relay:   GPIO --[relay IN]-- ...      (HIGH = relay ON)
 
 For active-low relay modules (common opto-isolated boards):
 ```
-Relay:   GPIO --[relay IN]-- ...      (LOW = relay ON ? set active_low = true)
+Relay:   GPIO --[relay IN]-- ...      (LOW = relay ON -> set active_low = true)
 ```
 
 ---

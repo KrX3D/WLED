@@ -142,11 +142,16 @@ class UsermodButtonRelayToggle : public Usermod {
     bool _activeLow[4]      = { RELAY_1_ACTIVE_LOW, RELAY_2_ACTIVE_LOW, RELAY_3_ACTIVE_LOW, RELAY_4_ACTIVE_LOW };
     uint8_t _bootState[4]   = { RELAY_1_BOOT_STATE, RELAY_2_BOOT_STATE, RELAY_3_BOOT_STATE, RELAY_4_BOOT_STATE };
 
-    // True while the next MQTT /set command for that relay must be checked
-    // against _bootState[] instead of being applied as-is. Armed whenever a
-    // relay is (re)initialized with a non-Default boot state; consumed by
-    // the first /set message received afterwards (see onMqttMessage).
-    bool _bootOverridePending[4] = { false, false, false, false };
+    // Non-zero while the *next* MQTT /set command for that relay must be
+    // checked against the relay's actual current state before being applied,
+    // because the broker can redeliver a stale retained command on every
+    // (re)subscribe (settings save, MQTT reconnect) - not just at boot. The
+    // value is the millis() deadline until which this applies; retained
+    // messages are redelivered essentially immediately on subscribe, so a
+    // short window lets us catch that case without also swallowing a
+    // genuine, live command that happens to arrive later. 0 = not armed.
+    unsigned long _overrideDeadline[4] = { 0, 0, 0, 0 };
+    #define RETAINED_MSG_WINDOW_MS 3000UL
 
     int oldButtonPins[4];
     int oldRelayPins[4];
@@ -169,7 +174,7 @@ class UsermodButtonRelayToggle : public Usermod {
     // NOT necessarily "the light is physically off"; that depends on
     // relay_active_low matching your wiring. On/Off use the same
     // relay_active_low-relative logic, so get that setting right first.
-    // On/Off additionally arm _bootOverridePending so the next MQTT /set
+    // On/Off additionally arm _overrideDeadline so the next MQTT /set
     // command can't silently undo them (e.g. a stale retained command
     // redelivered right after subscribing) - see onMqttMessage.
     ////////////////////////////////////////////////////////////////////////////////
@@ -179,14 +184,14 @@ class UsermodButtonRelayToggle : public Usermod {
       bool desiredLogicalOn = (_bootState[index] == RELAY_BOOT_ON); // Default and Off both start at logical OFF
       digitalWrite(_relayPins[index], _activeLow[index] ? !desiredLogicalOn : desiredLogicalOn);
 
-      _bootOverridePending[index] = (_bootState[index] != RELAY_BOOT_DEFAULT);
+      _overrideDeadline[index] = (_bootState[index] != RELAY_BOOT_DEFAULT) ? millis() + RETAINED_MSG_WINDOW_MS : 0;
 
       _logUsermodB_R_T("Relay %u boot state applied: %s logical %s (pin %d, activeLow=%d, overridePending=%d)",
                         index + 1,
                         _bootState[index] == RELAY_BOOT_DEFAULT ? "DEFAULT/feature-off ->" :
                         _bootState[index] == RELAY_BOOT_ON      ? "ON forced ->"           : "OFF forced ->",
                         desiredLogicalOn ? "ON" : "OFF",
-                        _relayPins[index], _activeLow[index], _bootOverridePending[index]);
+                        _relayPins[index], _activeLow[index], _overrideDeadline[index] != 0);
     }
 
     //----------------------------------------------------------------------------
@@ -735,7 +740,7 @@ class UsermodButtonRelayToggle : public Usermod {
 				// settings save or reconnect) - arm the override so onMqttMessage checks
 				// that first command against the actual current state (or the forced
 				// boot state for On/Off) instead of blindly applying it.
-				_bootOverridePending[i] = true;
+				_overrideDeadline[i] = millis() + RETAINED_MSG_WINDOW_MS;
 				if(mqtt->subscribe(subscriptionTopic.c_str(), 0)){
 				  _logUsermodB_R_T("Successfully subscribed to topic: %s", subscriptionTopic.c_str());
 				} else {
@@ -803,6 +808,8 @@ class UsermodButtonRelayToggle : public Usermod {
       memcpy(oldButtonPins, _buttonPins, sizeof(_buttonPins));
       memcpy(oldRelayPins,  _relayPins,  sizeof(_relayPins));
       memcpy(oldBootState,  _bootState,  sizeof(_bootState));
+      bool oldActiveLow[4];
+      memcpy(oldActiveLow,  _activeLow,  sizeof(_activeLow));
 
 	  // Read new configuration
 	  for (uint8_t i = 0; i < 4; i++) {
@@ -930,6 +937,17 @@ class UsermodButtonRelayToggle : public Usermod {
 			  _logUsermodB_R_T("Relay pin %d unchanged. Ensuring proper mode as OUTPUT and Active %s.",
 							_relayPins[i], _activeLow[i] ? "LOW" : "HIGH");
 			  pinMode(_relayPins[i], OUTPUT);
+			  // If relay_active_low changed but the physical pin/wiring didn't, the
+			  // pin level itself must NOT change - only re-drive it if needed so the
+			  // *logical* on/off state we report over MQTT/HA stays the same as
+			  // before the save. Otherwise flipping this setting would silently
+			  // invert what HA shows even though the relay's real state didn't change.
+			  if (oldActiveLow[i] != _activeLow[i]) {
+				bool logicalOn = oldActiveLow[i] ? !digitalRead(_relayPins[i]) : digitalRead(_relayPins[i]);
+				digitalWrite(_relayPins[i], _activeLow[i] ? !logicalOn : logicalOn);
+				_logUsermodB_R_T("Relay %u active_low changed (%d -> %d); re-drove pin to keep logical state %s.",
+								  i + 1, oldActiveLow[i], _activeLow[i], logicalOn ? "ON" : "OFF");
+			  }
 			  // If only the boot-state setting changed (pin/wiring untouched), apply
 			  // it immediately rather than waiting for the next physical reboot.
 			  if (oldBootState[i] != _bootState[i]) {
@@ -1023,14 +1041,18 @@ class UsermodButtonRelayToggle : public Usermod {
 		  ? !digitalRead(_relayPins[i])
 		  : digitalRead(_relayPins[i]);
 
-		// The first /set command received after any (re)subscribe is checked
-		// against the relay's actual CURRENT state instead of being applied
-		// blindly, because the broker redelivers retained commands on every
-		// subscribe - not just at boot, but also after every settings save
-		// (setupRelaySubscriptions runs again) and every MQTT reconnect. That
-		// stale command can silently override a manual/local relay state (e.g.
-		// HA still retaining "ON" from before you turned the light off, or
-		// relay_boot_state having just forced it Off at boot).
+		// The first /set command received within RETAINED_MSG_WINDOW_MS of any
+		// (re)subscribe is checked against the relay's actual CURRENT state
+		// instead of being applied blindly, because the broker redelivers
+		// retained commands on every subscribe - not just at boot, but also
+		// after every settings save (setupRelaySubscriptions runs again) and
+		// every MQTT reconnect. That stale command can silently override a
+		// manual/local relay state (e.g. HA still retaining "ON" from before
+		// you turned the light off, or relay_boot_state having just forced it
+		// Off at boot). The window is time-bounded (not just "the first
+		// command ever") so that a genuine, live command arriving well after
+		// the (re)subscribe - which is when a retained redelivery would have
+		// already happened - is never mistaken for a stale one.
 		//
 		// This intentionally does NOT re-derive relay_boot_state here: that
 		// setting only decides what to physically drive at the moment of a
@@ -1042,9 +1064,10 @@ class UsermodButtonRelayToggle : public Usermod {
 		// whatever the relay is currently, legitimately doing and just make
 		// sure MQTT/HA reflect it correctly.
 		bool overrodeCommand = false;
-		if (_bootOverridePending[i]) {
-		  _bootOverridePending[i] = false; // only the first command after (re)subscribe is affected
-		  if (desiredOn != currentOn) {
+		if (_overrideDeadline[i] != 0) {
+		  bool withinWindow = (long)(millis() - _overrideDeadline[i]) < 0;
+		  _overrideDeadline[i] = 0; // only the first command after (re)subscribe is checked
+		  if (withinWindow && desiredOn != currentOn) {
 			_logUsermodB_R_T("Group %u: first /set after (re)subscribe disagrees with actual relay state (cmd=%s, actual=%s) - correcting MQTT instead of applying it",
 							  i+1, desiredOn?"ON":"OFF", currentOn?"ON":"OFF");
 			desiredOn = currentOn;
