@@ -45,21 +45,27 @@ void UsermodNixieClock::loop() {
 	
 		// mainState is owned by setNixieMainPower(); bri > 0 is WLED's global on/off.
 		// nixiePower and dotsPower are independent — displayTime() handles both via show().
-		if (mainState && (bri > 0) && (nixiePower || dotsPower) && UM_ClockEnabled) {
-			// Anti-poisoning only makes sense when tubes are on
-			if (nixiePower) {
-				if (currentMillis - lastAntiPoisoningTime >= 120000 && !antiPoisoningInProgress) {
-					lastAntiPoisoningTime = currentMillis;
-					startAntiPoisoning();
-				}
-				handleAntiPoisoning();
+		// UM_ClockEnabled ("Enable_NixieTubes") only blanks the tube digits (see
+		// displayTime()) — it must NOT gate this whole block, or a dots-only
+		// setup (nixiePower=false, dotsPower=true) would freeze whenever it's off.
+		if (mainState && (bri > 0) && (nixiePower || dotsPower)) {
+			// Only start a new anti-poisoning cycle while the tubes are on, but
+			// keep servicing (and clearing) an already-started cycle even if
+			// nixiePower is toggled off mid-cycle — otherwise
+			// antiPoisoningInProgress would never clear and the "skip display
+			// during anti-poisoning" check below would freeze the dots forever.
+			if (nixiePower && !antiPoisoningInProgress && currentMillis - lastAntiPoisoningTime >= 120000) {
+				lastAntiPoisoningTime = currentMillis;
+				startAntiPoisoning();
+			}
+			handleAntiPoisoning();
 
-				// Force NTP re-sync at the configured interval
-				if (WLED_CONNECTED && UM_ntpUpdateForce && (currentMillis - lastNtpUpdate >= ntpUpdateInterval)) {
-					_logUsermodNixieClock("Force NTP Update triggered");
-					ntpLastSyncTime = NTP_NEVER;
-					lastNtpUpdate = currentMillis;
-				}
+			// Force NTP re-sync at the configured interval. Independent of tube
+			// power — dots (and the tubes once re-enabled) both need accurate time.
+			if (WLED_CONNECTED && UM_ntpUpdateForce && (currentMillis - lastNtpUpdate >= ntpUpdateInterval)) {
+				_logUsermodNixieClock("Force NTP Update triggered");
+				ntpLastSyncTime = NTP_NEVER;
+				lastNtpUpdate = currentMillis;
 			}
 
 			// Update display every second (skip during anti-poisoning)
@@ -122,7 +128,7 @@ void UsermodNixieClock::updateSegments() {
 //   dotsPower=true   → blink dots;        false → dots off (gated inside show())
 // show() applies the dotsPower gate, so this function doesn't need to check it.
 void UsermodNixieClock::displayTime() {
-	if (nixiePower) {
+	if (nixiePower && UM_ClockEnabled) {
 		byte timeDigits[] = {
 			static_cast<byte>(hour(localTime) / 10), static_cast<byte>(hour(localTime) % 10),
 			static_cast<byte>(minute(localTime) / 10), static_cast<byte>(minute(localTime) % 10),
@@ -418,8 +424,9 @@ void UsermodNixieClock::performRecovery() {
 	// If the bus is still broken, show() will detect it on the next send attempt.
 	lastSpiState = true;
 
-	// Refresh display
-	if (mainState && nixiePower && UM_ClockEnabled) {
+	// Refresh display — same gating condition as loop()/onStateChange() so a
+	// dots-only setup (nixiePower=false, dotsPower=true) isn't wrongly blanked.
+	if (mainState && (bri > 0) && (nixiePower || dotsPower)) {
 		displayTime();
 	} else {
 		powerOffNixieTubes();
@@ -503,8 +510,9 @@ void UsermodNixieClock::onStateChange(uint8_t mode) {
 
 	// mainState is owned by setNixieMainPower() — do not modify it here.
 	// bri > 0 is the WLED global on/off. nixiePower and dotsPower are independent.
-	// displayTime() handles both: digits gated on nixiePower, dots gated on dotsPower via show().
-	if (mainState && (bri > 0) && (nixiePower || dotsPower) && UM_ClockEnabled) {
+	// displayTime() handles both: digits gated on nixiePower (and UM_ClockEnabled),
+	// dots gated on dotsPower via show().
+	if (mainState && (bri > 0) && (nixiePower || dotsPower)) {
 		_logUsermodNixieClock("Display active (nixie=%d dots=%d), refreshing", nixiePower, dotsPower);
 		displayTime();
 	} else {
