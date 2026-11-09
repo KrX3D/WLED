@@ -10,7 +10,27 @@ SyslogPrinter::SyslogPrinter() :
   _severity(SYSLOG_DEBUG), 
   _protocol(SYSLOG_PROTO_BSD),
   _appName("WLED"),
-  _bufferIndex(0) {}
+  _bufferIndex(0) {
+  #ifdef ARDUINO_ARCH_ESP32
+    _lock = xSemaphoreCreateRecursiveMutexStatic(&_lockStorage);
+  #endif
+}
+
+bool SyslogPrinter::lock() {
+  #ifdef ARDUINO_ARCH_ESP32
+    if (xPortInIsrContext()) return false;
+    if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) return true;
+    return xSemaphoreTakeRecursive(_lock, pdMS_TO_TICKS(SYSLOG_LOCK_TIMEOUT_MS)) == pdTRUE;
+  #else
+    return true;
+  #endif
+}
+
+void SyslogPrinter::unlock() {
+  #ifdef ARDUINO_ARCH_ESP32
+    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) xSemaphoreGiveRecursive(_lock);
+  #endif
+}
 
 void SyslogPrinter::begin(const char* host, uint16_t port,
 					  uint8_t facility, uint8_t severity, uint8_t protocol) {
@@ -110,13 +130,13 @@ void SyslogPrinter::flushBuffer() {
   _buffer[_bufferIndex] = '\0';
 
   // Send the buffer with default severity
-  write((const uint8_t*)_buffer, _bufferIndex, _severity);
+  sendPacket((const uint8_t*)_buffer, _bufferIndex, _severity);
 
   // Reset buffer index
   _bufferIndex = 0;
 }
 
-size_t SyslogPrinter::write(uint8_t c) {
+void SyslogPrinter::appendChar(uint8_t c) {
   // Store in buffer regardless of connection status
   if (_bufferIndex < sizeof(_buffer) - 1) {
     _buffer[_bufferIndex++] = c;
@@ -126,19 +146,33 @@ size_t SyslogPrinter::write(uint8_t c) {
   if (c == '\n' || _bufferIndex >= sizeof(_buffer) - 1) {
     flushBuffer();
   }
-  
+}
+
+size_t SyslogPrinter::write(uint8_t c) {
+  if (!lock()) return 1;
+  appendChar(c);
+  unlock();
   return 1;
 }
 
 size_t SyslogPrinter::write(const uint8_t *buf, size_t size) {
   if (buf == nullptr || size == 0) return 0;
+  if (!lock()) return size;
   for (size_t i = 0; i < size; i++) {
-    write(buf[i]);
+    appendChar(buf[i]);
   }
+  unlock();
   return size;
 }
 
 size_t SyslogPrinter::write(const uint8_t *buf, size_t size, uint8_t severity) {
+  if (!lock()) return 0;
+  size_t sent = sendPacket(buf, size, severity);
+  unlock();
+  return sent;
+}
+
+size_t SyslogPrinter::sendPacket(const uint8_t *buf, size_t size, uint8_t severity) {
   _lastOperationSucceeded = true;
   if (!WLED_CONNECTED) {
     _lastOperationSucceeded = false;
