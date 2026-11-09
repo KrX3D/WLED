@@ -793,13 +793,15 @@ bool UsermodHourEffect::isCurrentTimeSane() {
   unsigned long elapsedMs = millis() - lastKnownGoodMillis;
   time_t expectedTime = lastKnownGoodTime + (elapsedMs / 1000UL);
 
-  long diff = (long)(localTime - expectedTime);
+  // Compare in UTC: localTime legitimately jumps an hour at every DST change.
+  time_t currentUtc = (time_t)toki.second();
+  long diff = (long)(currentUtc - expectedTime);
   if (diff < 0) diff = -diff;
 
   if (diff > MAX_ALLOWED_TIME_DRIFT_SEC) {
     _logUsermodHourEffect(
       "[TIME-SANITY] BAD TIME detected: current=%04d-%02d-%02d %02d:%02d:%02d expected~=%04d-%02d-%02d %02d:%02d:%02d diff=%ld sec",
-      year(localTime), month(localTime), day(localTime), hour(localTime), minute(localTime), second(localTime),
+      year(currentUtc), month(currentUtc), day(currentUtc), hour(currentUtc), minute(currentUtc), second(currentUtc),
       year(expectedTime), month(expectedTime), day(expectedTime), hour(expectedTime), minute(expectedTime), second(expectedTime),
       diff
     );
@@ -818,12 +820,19 @@ bool UsermodHourEffect::checkTimeSanity() {
   lastTimeSanityCheck = nowMs;
 
   if (!isCurrentTimeSane()) {
-    _logUsermodHourEffect("[TIME-SANITY] Forcing NTP re-sync");
-    ntpLastSyncTime = NTP_NEVER; // Force a new NTP query.
-    return false; // IMPORTANT: do not store bad time
+    // NTP has answered since we asked and still disagrees: the baseline is what's
+    // wrong. Without this, one real time step re-triggers NTP forever.
+    if (!(ntpResyncRequested && ntpLastSyncTime != NTP_NEVER)) {
+      _logUsermodHourEffect("[TIME-SANITY] Forcing NTP re-sync");
+      ntpResyncRequested = true;
+      ntpLastSyncTime = NTP_NEVER; // Force a new NTP query.
+      return false; // IMPORTANT: do not store bad time
+    }
+    _logUsermodHourEffect("[TIME-SANITY] NTP confirmed the new time, updating baseline");
   }
 
-  storeKnownGoodTime(localTime);
+  ntpResyncRequested = false;
+  storeKnownGoodTime((time_t)toki.second());
 
   _logUsermodHourEffect(
     "[TIME-SANITY] Time OK: %04d-%02d-%02d %02d:%02d:%02d",
@@ -1131,7 +1140,7 @@ void UsermodHourEffect::setup() {
 
   // Initialize time sanity baseline only if current time already looks valid
   if (isReasonableTimestamp(localTime)) {
-    storeKnownGoodTime(localTime);
+    storeKnownGoodTime((time_t)toki.second());
     _logUsermodHourEffect("[SETUP] Initial known-good time stored: %04d-%02d-%02d %02d:%02d:%02d",
                           year(localTime), month(localTime), day(localTime),
                           hour(localTime), minute(localTime), second(localTime));
