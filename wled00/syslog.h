@@ -2,6 +2,10 @@
 #define WLED_SYSLOG_H
 #include <WString.h>
 #include <WiFiUdp.h>
+#ifdef ARDUINO_ARCH_ESP32
+  #include <freertos/FreeRTOS.h>
+  #include <freertos/semphr.h>
+#endif
 
 // Buffer management
 #ifndef SYSLOG_BUFFER_SIZE
@@ -19,6 +23,11 @@
 // loop on every single debug line.
 #ifndef SYSLOG_RESOLVE_RETRY_MS
   #define SYSLOG_RESOLVE_RETRY_MS 10000UL
+#endif
+
+// How long a task waits for another task's log output before dropping its own.
+#ifndef SYSLOG_LOCK_TIMEOUT_MS
+  #define SYSLOG_LOCK_TIMEOUT_MS 50
 #endif
 
 class SyslogPrinter : public Print {
@@ -48,6 +57,17 @@ class SyslogPrinter : public Print {
 
     size_t _bufferIndex;
     void flushBuffer();
+    void appendChar(uint8_t c);
+    size_t sendPacket(const uint8_t *buf, size_t size, uint8_t severity);
+
+    // Debug output comes from the main loop and from async network callbacks,
+    // which share _buffer and syslogUdp.
+    bool lock();
+    void unlock();
+    #ifdef ARDUINO_ARCH_ESP32
+      StaticSemaphore_t _lockStorage;
+      SemaphoreHandle_t _lock;
+    #endif
 
   public:
     SyslogPrinter();
