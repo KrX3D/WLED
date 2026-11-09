@@ -204,6 +204,7 @@ private:
   ////////////////// Lux Sensor Configuration //////////////////
   String MqttLux = HOUR_EFFECT_MQTT_LUX;
   float luxValue = 0;
+  float lastTriggeredLux = 0;
   int luxThreshold = HOUR_EFFECT_LUX_THRESHOLD;
   uint8_t triggerMode = HOUR_EFFECT_TRIGGER_MODE; // 0=none, 1=presence only, 2=lux only (no turn off), 3=lux only (with turn off), 4=lux+presence (off on presence), 5=lux+presence (off on both)
 
@@ -316,6 +317,9 @@ private:
   bool evaluateSensorState(const MqttSensor& sensor, const String& payload);
   bool updateSensorState(SensorConfig& config, const char* topic, const char* payload);
   float extractLuxValue(const MqttSensor& sensor, const String& payload);
+  bool updateLuxValue(float newLux);
+  bool isTopicInList(const String& list, const char* topic);
+  bool isConfiguredLuxTopic(const char* topic);
 
 public:
   ////////////////// Effect Parameters //////////////////
