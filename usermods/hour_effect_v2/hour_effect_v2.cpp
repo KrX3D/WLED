@@ -231,15 +231,14 @@ void UsermodHourEffect::handleSimpleMultiTopicLux(const String& topics, const ch
       }
       
       // Check if lux value actually changed (deadband to ignore normal sensor jitter)
-      if (abs(newLuxValue - luxValue) < LUX_CHANGE_DELTA) {
-        _logUsermodHourEffect("[MULTI-LUX] Lux value unchanged (%.1f), ignoring", luxValue);
+      if (!updateLuxValue(newLuxValue)) {
+        _logUsermodHourEffect("[MULTI-LUX] Lux value within deadband (%.1f), no trigger", luxValue);
         return;
       }
       
-      _logUsermodHourEffect("[MULTI-LUX] Lux value CHANGED: %.1f -> %.1f", luxValue, newLuxValue);
-      luxValue = newLuxValue;
+      _logUsermodHourEffect("[MULTI-LUX] Lux value CHANGED: %.1f", luxValue);
       
-      if (!PresenceBlocker && !BlockTriggers) {
+      if (triggerMode >= 2 && !PresenceBlocker && !BlockTriggers) {
         _logUsermodHourEffect("[MULTI-LUX] Triggering presence/lux handler");
         handlePresenceLuxTrigger();
       } else {
@@ -281,11 +280,9 @@ void UsermodHourEffect::onStateChange(uint8_t mode) {
     if (isOn != wasOn) {
       _logUsermodHourEffect("[STATE-CHANGE] ON/OFF state changed, controlling MQTT lamps: %s", isOn ? "ON" : "OFF");
       controlMqttLamps(isOn);
+      if (isOn) manualOffOverride = false; // the user took over again, at any time of day
       if (isOn && !NightMode && !NotHome) {
-        // External turn-on (e.g. HA): clear the manual-off override so presence
-        // can drive the LEDs normally again, and re-enable SSDR/Nixie in case
-        // presence-off disabled them.
-        manualOffOverride = false;
+        // External turn-on (e.g. HA): re-enable SSDR/Nixie in case presence-off disabled them.
         #ifdef USERMOD_SSDR
           if (ssdr) {
             ssdr->disableOutputFunction(false);
@@ -1032,10 +1029,12 @@ void UsermodHourEffect::executeNightModeLogic() {
     lastLoggedHour = currentHour;
   }
   
-  // Build a timestamp string for logging.
-  String timestamp = String(day(localTime)) + "." + String(month(localTime)) + "." +
-                     String(year(localTime)) + " " + String(hour(localTime)) + ":" +
-                     String(minute(localTime)) + ":" + String(second(localTime));
+  // Runs on every loop(), so only build the string when something is published.
+  auto timestamp = []() {
+    return String(day(localTime)) + "." + String(month(localTime)) + "." +
+           String(year(localTime)) + " " + String(hour(localTime)) + ":" +
+           String(minute(localTime)) + ":" + String(second(localTime));
+  };
   
   // Turn NightMode OFF at the designated hour
   if (isTimeMatch(NightModeOff) && hour(localTime) != lastNightModeOffHour) {
@@ -1053,7 +1052,7 @@ void UsermodHourEffect::executeNightModeLogic() {
       } else {
         _logUsermodHourEffect("[NIGHT-LOGIC] Power-on disabled, LEDs state unchanged");
       }
-      publishMessage("NightMode", String("false") + " (" + timestamp + ")");
+      publishMessage("NightMode", String("false") + " (" + timestamp() + ")");
     } else {
       _logUsermodHourEffect("[NIGHT-LOGIC] NightMode was already OFF, no action needed");
     }
@@ -1090,7 +1089,7 @@ void UsermodHourEffect::executeNightModeLogic() {
       } else {
         _logUsermodHourEffect("[NIGHT-LOGIC] Power-off disabled, LEDs state unchanged");
       }
-      publishMessage("NightMode", String("true") + " (" + timestamp + ")");
+      publishMessage("NightMode", String("true") + " (" + timestamp() + ")");
     } else {
       _logUsermodHourEffect("[NIGHT-LOGIC] NightMode was already ON, no action needed");
     }
@@ -1653,6 +1652,15 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
     String targetDevice = "";
     time_t msgTimestamp = 0;
 
+    // The payload's speed/intensity/palette apply to this notification only; without
+    // this they would stick and change the hourly effect, even when the message
+    // was stale or addressed to another device.
+    struct EffectParamsGuard {
+      UsermodHourEffect& um;
+      uint8_t speed, intensity, palette;
+      ~EffectParamsGuard() { um.effectSpeed = speed; um.effectIntensity = intensity; um.pal = palette; }
+    } effectParamsGuard{*this, effectSpeed, effectIntensity, pal};
+
     if (!parseNotificationEffectPayload(payloadString, r, g, b, w, effectMode, durationMs, targetDevice, msgTimestamp)) {
       _logUsermodHourEffect("[MQTT-MSG] Notification payload ignored (invalid)");
       return true;
@@ -1733,14 +1741,16 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
         _logUsermodHourEffect("[MQTT-MSG] Presence unchanged (advanced): %d", presenceValue);
         reconcilePresenceLed();
       }
-      return true;
+      // The same sensor often reports presence and illuminance: let the lux
+      // handling below see this message too.
+      if (!isConfiguredLuxTopic(topic)) return true;
     }
   }
 
   // Simple presence mode
   if (useSimplePresence && !MqttPresence.isEmpty()) {
     // Check if this is a multi-topic configuration
-    if (MqttPresence.indexOf(',') >= 0) {
+    if (MqttPresence.indexOf(',') >= 0 && isTopicInList(MqttPresence, topic)) {
       _logUsermodHourEffect("[MQTT-MSG] Processing multi-topic simple presence");
       handleSimpleMultiTopicPresence(MqttPresence, topic, payload);
       return true;
@@ -1774,11 +1784,10 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
 
       // Check if values actually changed
       bool presenceChanged = (newPresenceValue != presenceValue);
-      bool luxChanged = luxFound && (abs(newLuxValue - luxValue) >= LUX_CHANGE_DELTA);
+      bool luxChanged = luxFound && updateLuxValue(newLuxValue);
 
       if (presenceChanged || luxChanged) {
         if (luxChanged) {
-          luxValue = newLuxValue;
           _logUsermodHourEffect("[MQTT-MSG] Lux CHANGED: %.1f", luxValue);
         }
         if (presenceChanged) {
@@ -1786,7 +1795,7 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
           manualOffOverride = false; // a genuine presence transition supersedes any manual override
           _logUsermodHourEffect("[MQTT-MSG] Presence CHANGED: %d", presenceValue);
         }
-        if (!PresenceBlocker && !BlockTriggers) {
+        if ((presenceChanged || triggerMode >= 2) && !PresenceBlocker && !BlockTriggers) {
           handlePresenceLuxTrigger();
         }
       } else {
@@ -1809,14 +1818,13 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
   
     if (isLuxTopic) {
       _logUsermodHourEffect("[MQTT-MSG] Processing advanced lux sensor");
-      updateSensorState(luxConfig, topic, payload);
+      // A lux reading is a number, so on_values/currentState don't apply here.
       for (const auto& sensor : luxConfig.sensors) {
-        if (sensor.currentState) {
+        if (isTopicMatch(topic, sensor.topic.c_str())) {
           float newLuxValue = extractLuxValue(sensor, payloadString);
-          if (abs(newLuxValue - luxValue) >= LUX_CHANGE_DELTA) {
-            luxValue = newLuxValue;
+          if (updateLuxValue(newLuxValue)) {
             _logUsermodHourEffect("[MQTT-MSG] Lux CHANGED (advanced): %.1f", luxValue);
-            if (!PresenceBlocker && !BlockTriggers) {
+            if (triggerMode >= 2 && !PresenceBlocker && !BlockTriggers) {
               handlePresenceLuxTrigger();
             }
           } else {
@@ -1832,7 +1840,7 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
   // Simple lux mode
   if (useSimpleLux && !MqttLux.isEmpty()) {
     // Check if this is a multi-topic configuration
-    if (MqttLux.indexOf(',') >= 0) {
+    if (MqttLux.indexOf(',') >= 0 && isTopicInList(MqttLux, topic)) {
       _logUsermodHourEffect("[MQTT-MSG] Processing multi-topic simple lux");
       handleSimpleMultiTopicLux(MqttLux, topic, payload);
       return true;
@@ -1864,7 +1872,7 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
         }
         
         // Check for presence in same message
-        if (doc.containsKey("presence")) {
+        if (useSimplePresence && doc.containsKey("presence")) {
           bool newPresenceValue = doc["presence"].as<bool>();
           if (newPresenceValue != presenceValue) {
             presenceValue = newPresenceValue;
@@ -1878,11 +1886,10 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
       }
       
       // Check if lux actually changed
-      if (abs(newLuxValue - luxValue) >= LUX_CHANGE_DELTA) {
-        luxValue = newLuxValue;
+      if (updateLuxValue(newLuxValue)) {
         _logUsermodHourEffect("[MQTT-MSG] Lux CHANGED: %.1f", luxValue);
         
-        if (!PresenceBlocker && !BlockTriggers) {
+        if (triggerMode >= 2 && !PresenceBlocker && !BlockTriggers) {
           handlePresenceLuxTrigger();
         }
       } else {
@@ -2216,16 +2223,19 @@ bool UsermodHourEffect::evaluateSensorState(const MqttSensor& sensor, const Stri
   // If path is specified, extract from JSON
   if (sensor.path.length() > 0) {
     _logUsermodHourEffect("[SENSOR-EVAL] Extracting JSON path: '%s'", sensor.path.c_str());
-    DynamicJsonDocument doc(512);
-    DeserializationError error = deserializeJson(doc, payload);
-    
-    if (!error) {
-      value = doc[sensor.path].as<String>();
-      _logUsermodHourEffect("[SENSOR-EVAL] Extracted value: '%s'", value.c_str());
-    } else {
-      _logUsermodHourEffect("[SENSOR-EVAL] JSON parse error: %s", error.c_str());
-      return false;
+    // Filtering keeps memory use independent of how chatty the sensor's payload is.
+    StaticJsonDocument<128> filter;
+    filter[sensor.path] = true;
+    DynamicJsonDocument doc(256);
+    DeserializationError error = deserializeJson(doc, payload, DeserializationOption::Filter(filter));
+
+    // A bad or partial message says nothing about presence: keep the last state.
+    if (error || doc[sensor.path].isNull()) {
+      _logUsermodHourEffect("[SENSOR-EVAL] No usable '%s' in payload (%s), keeping state", sensor.path.c_str(), error.c_str());
+      return sensor.currentState;
     }
+    value = doc[sensor.path].as<String>();
+    _logUsermodHourEffect("[SENSOR-EVAL] Extracted value: '%s'", value.c_str());
   } else {
     _logUsermodHourEffect("[SENSOR-EVAL] Using direct payload value: '%s'", value.c_str());
   }
@@ -2275,9 +2285,15 @@ float UsermodHourEffect::extractLuxValue(const MqttSensor& sensor, const String&
   // If path is specified, extract from JSON
   if (sensor.path.length() > 0) {
     _logUsermodHourEffect("[EXTRACT-LUX] Using JSON path: '%s'", sensor.path.c_str());
-    DynamicJsonDocument doc(512);
-    DeserializationError error = deserializeJson(doc, payload);
-    
+    StaticJsonDocument<128> filter;
+    filter[sensor.path] = true;
+    DynamicJsonDocument doc(256);
+    DeserializationError error = deserializeJson(doc, payload, DeserializationOption::Filter(filter));
+
+    if (!error && doc[sensor.path].isNull()) {
+      _logUsermodHourEffect("[EXTRACT-LUX] No '%s' in payload, keeping %.1f", sensor.path.c_str(), luxValue);
+      return luxValue;
+    }
     if (!error) {
       float result = doc[sensor.path].as<float>();
       _logUsermodHourEffect("[EXTRACT-LUX] Extracted from JSON: %.1f", result);
@@ -2303,13 +2319,14 @@ float UsermodHourEffect::extractLuxValue(const MqttSensor& sensor, const String&
 // aggregate presence value should be (which can stay latched TRUE/FALSE
 // across a sensor's own transitions when other sensors keep it pinned).
 bool UsermodHourEffect::updateSensorState(SensorConfig& config, const char* topic, const char* payload) {
-  String topicStr = String(topic);
   String payloadStr = String(payload);
+  bool risingEdge = false;
 
   _logUsermodHourEffect("[SENSOR-UPDATE] Received MQTT: topic='%s', payload='%s'", topic, payload);
 
+  // No early exit: several sensors may read different fields of the same topic.
   for (auto& sensor : config.sensors) {
-    if (topicStr.endsWith(sensor.topic) || topicStr.indexOf(sensor.topic) >= 0) {
+    if (isTopicMatch(topic, sensor.topic.c_str())) {
       _logUsermodHourEffect("[SENSOR-UPDATE] Matched sensor '%s'", sensor.id.c_str());
 
       bool newState = evaluateSensorState(sensor, payloadStr);
@@ -2321,14 +2338,37 @@ bool UsermodHourEffect::updateSensorState(SensorConfig& config, const char* topi
           sensor.id.c_str(),
           oldState ? "TRUE" : "FALSE",
           newState ? "TRUE" : "FALSE");
-        return newState && !oldState;
+        risingEdge |= newState && !oldState;
       } else {
         _logUsermodHourEffect("[SENSOR-UPDATE] Sensor '%s' state unchanged: %s",
           sensor.id.c_str(),
           newState ? "TRUE" : "FALSE");
       }
-      break;
     }
+  }
+  return risingEdge;
+}
+
+// Returns true when the change since the last trigger is big enough to act on.
+// The latest reading is always stored so decisions never use a stale value.
+bool UsermodHourEffect::updateLuxValue(float newLux) {
+  luxValue = newLux;
+  if (fabsf(newLux - lastTriggeredLux) < LUX_CHANGE_DELTA) return false;
+  lastTriggeredLux = newLux;
+  return true;
+}
+
+bool UsermodHourEffect::isTopicInList(const String& list, const char* topic) {
+  for (const auto& entry : parseTopicList(list)) {
+    if (isTopicMatch(topic, entry.c_str())) return true;
+  }
+  return false;
+}
+
+bool UsermodHourEffect::isConfiguredLuxTopic(const char* topic) {
+  if (useSimpleLux) return !MqttLux.isEmpty() && isTopicInList(MqttLux, topic);
+  for (const auto& sensor : luxConfig.sensors) {
+    if (isTopicMatch(topic, sensor.topic.c_str())) return true;
   }
   return false;
 }
