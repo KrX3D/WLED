@@ -238,6 +238,16 @@ class UsermodButtonRelayToggle : public Usermod {
 	  // Initialize all configured pins
 	  _logUsermodB_R_T("Setup starting (enabled=%s, HA discovery=%s)", enabled ? "true" : "false", haDiscovery ? "true" : "false");
 
+	  // A disabled usermod must not claim GPIOs or drive relays. readFromConfig()
+	  // allocates everything if it gets enabled later.
+	  if (!enabled) {
+	    memcpy(oldButtonPins, _buttonPins, sizeof(_buttonPins));
+	    memcpy(oldRelayPins, _relayPins, sizeof(_relayPins));
+	    memcpy(oldBootState, _bootState, sizeof(_bootState));
+	    initDone = true;
+	    return;
+	  }
+
 	  for (uint8_t i = 0; i < 4; i++) {
 	    // ---------------- BUTTON ----------------
 	    if (_buttonPins[i] != -1 && PinManager::allocatePin(_buttonPins[i], false, PinOwner::UM_BUTTON_RELAY_TOGGLE)) {
@@ -595,9 +605,7 @@ class UsermodButtonRelayToggle : public Usermod {
       if(sensorType == "switch"){
         doc["cmd_t"] = String(topic) + "/set";
         doc["dev_cla"] = sensorType;
-        doc["ret"] = true;
       }
-      if(entityCategory != "diagnostic") doc["exp_aft"] = 1800;
 
       JsonObject device = doc.createNestedObject("device");
       device["name"] = serverDescription;
@@ -717,11 +725,9 @@ class UsermodButtonRelayToggle : public Usermod {
 			String subscriptionTopic = String(baseTopic) + "/" + _groups[i] + "/Relay/set";
 			_logUsermodB_R_T("Processing relay group %d, subscription topic: %s", i + 1, subscriptionTopic.c_str());
 
-			if(_relayPins[i]==-1 || !haDiscovery || !enabled){
+			if(_relayPins[i]==-1 || !enabled){
 				if (_relayPins[i] == -1) {
 				  _logUsermodB_R_T("Relay pin for group %d is unused; unsubscribing from topic: %s", i + 1, subscriptionTopic.c_str());
-				} else if (!haDiscovery) {
-				  _logUsermodB_R_T("Home Assistant discovery is disabled; unsubscribing from topic: %s", subscriptionTopic.c_str());
 				} else if (!enabled) {
 				  _logUsermodB_R_T("Usermod is disabled; unsubscribing from topic: %s", subscriptionTopic.c_str());
 				}
@@ -1033,7 +1039,14 @@ class UsermodButtonRelayToggle : public Usermod {
 		
 		if (!fullTopic.endsWith(expectedTopicEnd)) continue;
 		
-		bool desiredOn  = strcasecmp(payload,"ON") == 0;
+		// Anything else (e.g. the empty payload that clears a retained message) is
+		// not a command and must not switch the relay off.
+		bool isOnCommand = strcasecmp(payload, "ON") == 0;
+		if (!isOnCommand && strcasecmp(payload, "OFF") != 0) {
+			_logUsermodB_R_T("Ignoring invalid /set payload for group %u: '%s'", i + 1, payload);
+			return true;
+		}
+		bool desiredOn = isOnCommand;
 		_logUsermodB_R_T("MQTT receiverd relay %u to %s", i+1, desiredOn  ? "ON":"OFF");
 
 		// Current logical state (account for activeLow)
