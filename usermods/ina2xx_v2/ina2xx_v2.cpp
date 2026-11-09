@@ -296,7 +296,7 @@ String UsermodINA2xx::sanitizeMqttClientID(const String &clientID) {
 ** Function to update energy calculations based on power and duration
 **/
 void UsermodINA2xx::updateEnergy(float power, unsigned long durationMs) {
-	float durationHours = durationMs / 3600000.0; // Milliseconds to hours
+	double durationHours = durationMs / 3600000.0; // Milliseconds to hours
 	_logUsermodInaSensor("Updating energy - Power: %.3f W, Duration: %lu ms (%.6f hours)", power, durationMs, durationHours);
 
 	// Skip time-based resets if time seems invalid (before 2020 or unrealistic future)
@@ -305,7 +305,7 @@ void UsermodINA2xx::updateEnergy(float power, unsigned long durationMs) {
 		return;
 	}
 
-	float energy_kWh = 0.0f;
+	double energy_kWh = 0.0;
 	if (power < 0.01f) {
 		_logUsermodInaSensor("Power too low (%.3f W) – skipping accumulation.", power);
 	} else {
@@ -580,26 +580,29 @@ bool UsermodINA2xx::onMqttMessage(char* topic, char* payload) {
 		}
 
 		// Update the energy values
-		if (!mqttStateRestored) {
+		// Only capture the first message: the callback runs on the AsyncTCP task, so
+		// applying here would race loop() and add the restored values twice, and
+		// re-capturing would let our own echo wipe a restore still waiting for NTP.
+		if (!mqttStateRestored && !mqttRestorePending) {
 			mqttRestoreData = MqttRestoreData{};
 
 			if (jsonDoc.containsKey("daily_energy_kWh")) {
-				float restored = jsonDoc["daily_energy_kWh"];
-				if (!isnan(restored) && restored >= 0) {
+				double restored = jsonDoc["daily_energy_kWh"];
+				if (!isnan(restored) && restored >= 0 && restored <= INA2XX_MAX_PLAUSIBLE_KWH) {
 					mqttRestoreData.hasDailyEnergy = true;
 					mqttRestoreData.dailyEnergy = restored;
 				}
 			}
 			if (jsonDoc.containsKey("monthly_energy_kWh")) {
-				float restored = jsonDoc["monthly_energy_kWh"];
-				if (!isnan(restored) && restored >= 0) {
+				double restored = jsonDoc["monthly_energy_kWh"];
+				if (!isnan(restored) && restored >= 0 && restored <= INA2XX_MAX_PLAUSIBLE_KWH) {
 					mqttRestoreData.hasMonthlyEnergy = true;
 					mqttRestoreData.monthlyEnergy = restored;
 				}
 			}
 			if (jsonDoc.containsKey("total_energy_kWh")) {
-				float restored = jsonDoc["total_energy_kWh"];
-				if (!isnan(restored) && restored >= 0) {
+				double restored = jsonDoc["total_energy_kWh"];
+				if (!isnan(restored) && restored >= 0 && restored <= INA2XX_MAX_PLAUSIBLE_KWH) {
 					mqttRestoreData.hasTotalEnergy = true;
 					mqttRestoreData.totalEnergy = restored;
 				}
@@ -633,8 +636,7 @@ bool UsermodINA2xx::onMqttMessage(char* topic, char* payload) {
 				}
 			}
 
-			mqttRestorePending = true;
-			applyMqttRestoreIfReady();
+			mqttRestorePending = true; // applied from loop()
 		}
 		return true;
 	}
@@ -939,7 +941,7 @@ void UsermodINA2xx::readFromJsonState(JsonObject& root) {
 		}
 
 		if (usermod.containsKey("totalEnergy_kWh")) {
-			float prevTotal = totalEnergy_kWh;
+			double prevTotal = totalEnergy_kWh;
 			totalEnergy_kWh = usermod["totalEnergy_kWh"] | totalEnergy_kWh;
 			if (totalEnergy_kWh != prevTotal) {
 				_logUsermodInaSensor("Total energy updated from JSON: %.6f kWh", totalEnergy_kWh);
@@ -947,7 +949,7 @@ void UsermodINA2xx::readFromJsonState(JsonObject& root) {
 		}
 
 		if (usermod.containsKey("dailyEnergy_kWh")) {
-			float prevDaily = dailyEnergy_kWh;
+			double prevDaily = dailyEnergy_kWh;
 			dailyEnergy_kWh = usermod["dailyEnergy_kWh"] | dailyEnergy_kWh;
 			if (dailyEnergy_kWh != prevDaily) {
 				_logUsermodInaSensor("Daily energy updated from JSON: %.6f kWh", dailyEnergy_kWh);
@@ -955,7 +957,7 @@ void UsermodINA2xx::readFromJsonState(JsonObject& root) {
 		}
 
 		if (usermod.containsKey("monthlyEnergy_kWh")) {
-			float prevMonthly = monthlyEnergy_kWh;
+			double prevMonthly = monthlyEnergy_kWh;
 			monthlyEnergy_kWh = usermod["monthlyEnergy_kWh"] | monthlyEnergy_kWh;
 			if (monthlyEnergy_kWh != prevMonthly) {
 				_logUsermodInaSensor("Monthly energy updated from JSON: %.6f kWh", monthlyEnergy_kWh);
