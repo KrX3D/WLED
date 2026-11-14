@@ -119,6 +119,16 @@ The `i2cAddress` parameter can be set to the following options:
 | `0x44`              | 0x44 - A1 soldered                 | 0x44    |
 | `0x45`              | 0x45 - A0 and A1 soldered          | 0x45    |
 
+### MQTT publish behaviour
+
+The sensor is read every `check_interval` seconds. A new MQTT message is only sent when
+- bus voltage, load voltage, current or power moved by more than `change_threshold` percent of the last published value (but at least 0.01 V, A or W), or the overflow flag changed, or
+- `heartbeat_interval` seconds passed since the last message, or
+- after boot or an MQTT reconnect, or
+- `mqtt_publish_always` is enabled.
+
+> **Note:** Home Assistant discovery sets `expire_after` to 1800 s, so the sensors become unavailable after 30 minutes without a message. Keep `heartbeat_interval` below 1800. With `0`, sensors whose readings stay steady go unavailable after 30 minutes.
+
 ---
 
 # Compiling
