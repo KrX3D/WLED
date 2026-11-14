@@ -49,6 +49,8 @@ This Usermod integrates the INA219 **and** INA226 sensors with WLED to monitor e
 | `INA2XX_CORRECTION_FACTOR`    | Correction factor for measurements                         | `1.0`          | Any positive float value                               |
 | `INA2XX_MQTT_PUBLISH`         | Publish sensor data to MQTT                                | `false`        | `true`, `false`                                        |
 | `INA2XX_MQTT_PUBLISH_ALWAYS`  | Always publish values, regardless of change                | `false`        | `true`, `false`                                        |
+| `INA2XX_CHANGE_THRESHOLD`     | Publish when bus/load voltage, current or power change by more than this percent of the last published value (minimum step 0.01 V/A/W) | `1.0` | `0` to `100` |
+| `INA2XX_HEARTBEAT_INTERVAL`   | Publish at least every N seconds even without a change (`0` = only on change) | `30` | `0` to `3600` |
 | `INA2XX_HA_DISCOVERY`         | Enable Home Assistant discovery for sensors                | `false`        | `true`, `false`                                        |
 
 ### INA219-Specific Parameters (`INA_SENSOR_TYPE == 219`)
@@ -157,6 +159,8 @@ custom_usermods = ${env:d1_mini.custom_usermods} INA2XX_v2
 #define INA2XX_RANGE               1.3              // INA226 only
 #define INA2XX_MQTT_PUBLISH        false
 #define INA2XX_MQTT_PUBLISH_ALWAYS false
+#define INA2XX_CHANGE_THRESHOLD    1.0              // percent
+#define INA2XX_HEARTBEAT_INTERVAL  30               // seconds, 0 = off
 #define INA2XX_HA_DISCOVERY        false
 ```
 
