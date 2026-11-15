@@ -1394,6 +1394,15 @@ bool UsermodHourEffect::isTopicMatch(const char* topic, const char* suffix) cons
   return endsWith;
 }
 
+// Value of the first key that is present, else the fallback.
+// `doc["a"] | doc["b"]` cannot be used for this: ArduinoJson tests the left variant
+// with its bool conversion, so a value of 0 counts as missing and is replaced.
+static long jsonIntEither(JsonVariantConst primary, JsonVariantConst alias, long fallback) {
+  if (!primary.isNull()) return primary.as<long>();
+  if (!alias.isNull()) return alias.as<long>();
+  return fallback;
+}
+
 bool UsermodHourEffect::parseNotificationEffectPayload(const String& payload, uint8_t& r, uint8_t& g, uint8_t& b,
                                                      uint8_t& w, uint8_t& effectMode, unsigned long& durationMs, String& targetDevice, time_t& msgTimestamp) {
   String trimmed = payload;
@@ -1427,12 +1436,12 @@ bool UsermodHourEffect::parseNotificationEffectPayload(const String& payload, ui
     return false;
   }
 
-  r = (uint8_t) constrain((int)(doc["r"] | doc["red"] | r), 0, 255);
-  g = (uint8_t) constrain((int)(doc["g"] | doc["green"] | g), 0, 255);
-  b = (uint8_t) constrain((int)(doc["b"] | doc["blue"] | b), 0, 255);
-  w = (uint8_t) constrain((int)(doc["w"] | doc["white"] | w), 0, 255);
+  r = (uint8_t) constrain(jsonIntEither(doc["r"], doc["red"], r), 0, 255);
+  g = (uint8_t) constrain(jsonIntEither(doc["g"], doc["green"], g), 0, 255);
+  b = (uint8_t) constrain(jsonIntEither(doc["b"], doc["blue"], b), 0, 255);
+  w = (uint8_t) constrain(jsonIntEither(doc["w"], doc["white"], w), 0, 255);
 
-  effectMode = (uint8_t) constrain((int)(doc["effect"] | doc["mode"] | effectMode), 0, 255);
+  effectMode = (uint8_t) constrain(jsonIntEither(doc["effect"], doc["mode"], effectMode), 0, 255);
   effectSpeed = (uint8_t) constrain((int)(doc["speed"] | effectSpeed), 0, 255);
   effectIntensity = (uint8_t) constrain((int)(doc["intensity"] | effectIntensity), 0, 255);
   pal = (uint8_t) constrain((int)(doc["palette"] | pal), 0, 255);
@@ -1448,8 +1457,8 @@ bool UsermodHourEffect::parseNotificationEffectPayload(const String& payload, ui
     return false;
   }
 
-  unsigned long parsedDuration = doc["durationMs"] | doc["duration"] | durationMs;
-  durationMs = constrain(parsedDuration, 100UL, 600000UL);
+  long parsedDuration = jsonIntEither(doc["durationMs"], doc["duration"], (long)durationMs);
+  durationMs = (unsigned long)constrain(parsedDuration, 100L, 600000L);
 
   // Optional Unix timestamp (seconds). Used by the caller to detect stale
   // retained MQTT messages so they are not replayed after reconnect.
