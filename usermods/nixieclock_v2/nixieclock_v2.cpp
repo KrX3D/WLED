@@ -98,8 +98,10 @@ void UsermodNixieClock::updateSegments() {
 	
 	// Recreate segments with proper geometry
 	strip.getSegment(0).setGeometry(0, 1);  // Segment 0: RGB LED (Single LED Control)
-	strip.getSegment(1).setGeometry(1, 2);  // Segment 1: Dots (Control Only)
-	strip.getSegment(2).setGeometry(2, 3);  // Segment 2: Nixie Tubes (Control Only)
+	// getSegment() falls back to the main segment for ids that don't exist yet,
+	// so the two extra segments have to be appended.
+	strip.appendSegment(1, 2);  // Segment 1: Dots (Control Only)
+	strip.appendSegment(2, 3);  // Segment 2: Nixie Tubes (Control Only)
 	
 	// Restore previous states
 	strip.getSegment(0).setOption(SEG_OPTION_ON, prevLedOn);
@@ -326,9 +328,17 @@ void UsermodNixieClock::updateNixieClockSettings() {
 	// Check for valid SPI pins and NTP status.
 	// (spi_sclk, spi_mosi, and ntpEnabled are assumed to be defined by WLED.)
 	if (spi_sclk<0 || spi_mosi<0 || !UM_enabled || !ntpEnabled) { 
-		UM_enabled = false;			
-		powerOffNixieTubes();
-		strip.resetSegments();  // Clear all segments
+		// Only tear down what this usermod actually set up: a usermod that was never
+		// active must not touch the latch pin or wipe the user's segments.
+		if (PinManager::isPinAllocated(UM_latchPin, PinOwner::UM_NIXIECLOCK)) {
+			if (spi_sclk >= 0 && spi_mosi >= 0) {
+				UM_enabled = true; // show() is a no-op while disabled
+				powerOffNixieTubes();
+			}
+			strip.resetSegments();  // Clear all segments
+			deallocateLatchPin();
+		}
+		UM_enabled = false;
 		_logUsermodNixieClock("Disabled due to invalid SPI pins or NTP not enabled");
 		
 		// Additional logging
@@ -348,8 +358,6 @@ void UsermodNixieClock::updateNixieClockSettings() {
 	if (!PinManager::allocatePin(UM_latchPin, true, PinOwner::UM_NIXIECLOCK)) {
 		_logUsermodNixieClock("Latch pin allocation failed! Disabling usermod.");
 		UM_enabled = false; // Disable usermod if allocation fails.
-		powerOffNixieTubes();
-		strip.resetSegments();  // Clear all segments
 		return;
 	}
 	
@@ -367,16 +375,16 @@ void UsermodNixieClock::updateNixieClockSettings() {
 	setupSegmentsFinished = false;
 	
 	_logUsermodNixieClock("LED Enabled: %s", UM_LedEnabled ? "true" : "false");
-	static unsigned long lastBriUpdate = 0;
-	
-	// Update brightness (ON/OFF) for the RGB LED segment if required.
-	if (millis() - lastBriUpdate > 1000) { // update at most every 1000ms (prevents bootloop)
-		lastBriUpdate = millis();
+
+	// Only act when the setting actually changed: every settings save lands here,
+	// and it must not switch the LEDs back on after they were turned off.
+	// mainState stays owned by setNixieMainPower().
+	if (static_cast<int8_t>(UM_LedEnabled) != lastAppliedLedEnabled) {
+		lastAppliedLedEnabled = UM_LedEnabled;
 		if (UM_LedEnabled) {
 			if (bri == 0 && briLast > 0) {  // Prevent restoring 0 brightness
 				bri = briLast;
 				applyFinalBri();
-				mainState = true;
 				_logUsermodNixieClock("Restored brightness for LED: %d", bri);
 			}
 		} else {
@@ -384,7 +392,6 @@ void UsermodNixieClock::updateNixieClockSettings() {
 				briLast = bri;
 				bri = 0;
 				applyFinalBri();
-				mainState = false;
 				_logUsermodNixieClock("LED brightness set to 0");
 			}
 		}
@@ -457,6 +464,7 @@ void UsermodNixieClock::addToConfig(JsonObject &root) {
 bool UsermodNixieClock::readFromConfig(JsonObject &root) {
 	JsonObject top = root["NixieClock"];
 	_logUsermodNixieClock("Reading config...");
+	uint8_t previousLatchPin = UM_latchPin;
 
 	bool configComplete = !top.isNull(); // Check if the configuration exists
 
@@ -484,6 +492,13 @@ bool UsermodNixieClock::readFromConfig(JsonObject &root) {
 	_logUsermodNixieClock("Force NTP: %d, NTP Interval: %d min", UM_ntpUpdateForce, 
 				ntpUpdateInterval / (1000 * 60));
 	
+	// The latch pin member is already overwritten here, so the old pin has to be
+	// released explicitly or it stays allocated until the next reboot.
+	if (previousLatchPin != UM_latchPin && PinManager::isPinAllocated(previousLatchPin, PinOwner::UM_NIXIECLOCK)) {
+		PinManager::deallocatePin(previousLatchPin, PinOwner::UM_NIXIECLOCK);
+		_logUsermodNixieClock("Released previous latch pin %d", previousLatchPin);
+	}
+
 	updateNixieClockSettings();
 	
 	return configComplete; // Return whether the configuration was complete

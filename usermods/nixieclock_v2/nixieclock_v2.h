@@ -64,6 +64,7 @@ private:
     bool UM_enabled = NIXIECLOCK_ENABLED;
     uint8_t UM_latchPin = LATCH_PIN;
     bool UM_LedEnabled = NIXIECLOCK_RGB_ENABLED;
+    int8_t lastAppliedLedEnabled = -1; // -1 = not applied yet
     bool UM_DotsEnabled = NIXIECLOCK_DOTS_ENABLED;
     bool UM_ClockEnabled = NIXIECLOCK_CLOCK_ENABLED;
     bool UM_ntpUpdateForce = NIXIECLOCK_FORCE_NTP_ENABLED;   // Flag to enable/disable forced NTP update
