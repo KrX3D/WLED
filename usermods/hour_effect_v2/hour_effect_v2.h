@@ -174,6 +174,7 @@ private:
   time_t lastKnownGoodTime = 0;
   unsigned long lastKnownGoodMillis = 0;
   unsigned long lastTimeSanityCheck = 0;
+  bool ntpResyncRequested = false;
   static constexpr unsigned long TIME_SANITY_CHECK_INTERVAL_MS = 120000UL; // 2 min
   static constexpr long MAX_ALLOWED_TIME_DRIFT_SEC = 300; // 5 min tolerance
   
