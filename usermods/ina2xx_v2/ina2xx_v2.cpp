@@ -472,7 +472,9 @@ void UsermodINA2xx::mqttCreateHassSensor(const String &name, const String &topic
 	uid += "_" + sanitizedName;
 	doc[F("uniq_id")] = uid;
 	_logUsermodInaSensor("Sensor unique ID: %s", uid.c_str());
-	doc[F("val_tpl")] = String("{{ value_json.") + jsonKey + String(" }}");
+	// Energy keys are only in the payload once the retained state was restored from MQTT,
+	// so default to none (HA: unknown) instead of failing on a missing key.
+	doc[F("val_tpl")] = String("{{ value_json.") + jsonKey + String(" | default(none) }}");
 	if (unitOfMeasurement != "")
 		doc[F("unit_of_meas")] = unitOfMeasurement;
 	if (deviceClass != "")
@@ -490,9 +492,9 @@ void UsermodINA2xx::mqttCreateHassSensor(const String &name, const String &topic
 
 		// Provide last_reset for daily/monthly
 		if (jsonKey == "daily_energy_kWh") {
-			doc[F("last_reset_value_template")] = "{{ value_json.dailyResetTimestamp | int | timestamp_local if value_json.dailyResetTimestamp | int > 0 else none }}";
+			doc[F("last_reset_value_template")] = "{% set ts = (value_json.dailyResetTimestamp | default(0)) | int %}{{ ts | timestamp_local if ts > 0 else none }}";
 		} else if (jsonKey == "monthly_energy_kWh") {
-			doc[F("last_reset_value_template")] = "{{ value_json.monthlyResetTimestamp | int | timestamp_local if value_json.monthlyResetTimestamp | int > 0 else none }}";
+			doc[F("last_reset_value_template")] = "{% set ts = (value_json.monthlyResetTimestamp | default(0)) | int %}{{ ts | timestamp_local if ts > 0 else none }}";
 		}
 	}
 	else if (jsonKey == "current_A" || jsonKey == "current_mA" ||
