@@ -1,0 +1,8 @@
+{
+  "name": "fw_update",
+  "build": {
+    "libArchive": false,
+    "extraScript": "fw_update_build.py"
+  },
+  "dependencies": {}
+}
