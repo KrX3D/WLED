@@ -1,0 +1,114 @@
+name: Device builds
+
+# Builds the KrX3D usermods / syslog feature for the chips and flags of the real
+# devices. The same file lives on every usermod base branch; the build matrix
+# only contains entries whose usermod (or syslog source) exists in the checkout.
+
+on:
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  push:
+    branches:
+      - 0_15
+      - button_relay_toggle_UM
+      - hour_effect_v2
+      - nixieclock_v2_UM
+      - syslog
+      - usermod_seven_segment_display_reloaded
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+concurrency:
+  group: device-builds-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  matrix:
+    name: Select device builds
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.select.outputs.include }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: select
+        shell: python
+        run: |
+          import json, os
+          # name, requirement (usermod dir or "syslog"), base env, custom_usermods, extra build flags
+          table = [
+            ("hour_effect_v2-esp32",   "hour_effect_v2", "esp32dev",            "auto_save hour_effect_v2", "-D USERMOD_HOUR_EFFECT_KRX -D WLED_DEBUG -D WLED_DISABLE_2D"),
+            ("hour_effect_v2-esp32c3", "hour_effect_v2", "esp32c3dev",          "auto_save hour_effect_v2", "-D USERMOD_HOUR_EFFECT_KRX -D WLED_DEBUG"),
+            ("hour_effect_v2-esp32s2", "hour_effect_v2", "lolin_s2_mini",       "auto_save hour_effect_v2", "-D USERMOD_HOUR_EFFECT_KRX"),
+            ("hour_effect_v2-esp32s3", "hour_effect_v2", "esp32s3dev_16MB_opi", "auto_save hour_effect_v2", "-D USERMOD_HOUR_EFFECT_KRX -D WLED_DEBUG -D WLED_DISABLE_2D"),
+            ("ina2xx_v2-219-esp32",    "ina2xx_v2", "esp32dev",      "auto_save ina2xx_v2", "-D INA_SENSOR_TYPE=219 -D WLED_DEBUG -D WLED_DISABLE_2D"),
+            ("ina2xx_v2-219-esp32c3",  "ina2xx_v2", "esp32c3dev",    "auto_save ina2xx_v2", "-D INA_SENSOR_TYPE=219 -D WLED_DEBUG"),
+            ("ina2xx_v2-226-esp32s2",  "ina2xx_v2", "lolin_s2_mini", "auto_save ina2xx_v2", "-D INA_SENSOR_TYPE=226"),
+            ("button_relay_toggle_v2-esp32",         "button_relay_toggle_v2", "esp32dev", "auto_save button_relay_toggle_v2", "-D USERMOD_BUTTON_RELAY_TOGGLE -D WLED_DEBUG -D WLED_DISABLE_2D"),
+            ("button_relay_toggle_v2-esp32-no-mqtt", "button_relay_toggle_v2", "esp32dev", "auto_save button_relay_toggle_v2", "-D USERMOD_BUTTON_RELAY_TOGGLE -D WLED_DISABLE_MQTT"),
+            ("nixieclock_v2-esp32s3", "nixieclock_v2", "esp32s3dev_16MB_opi", "auto_save nixieclock_v2", "-D NIXIECLOCK -D WLED_DEBUG -D WLED_DISABLE_2D"),
+            ("ssdr_v2-esp32s2", "seven_segment_display_reloaded_v2", "lolin_s2_mini", "auto_save seven_segment_display_reloaded_v2", "-D ELEKSTUBE -D WLED_DEBUG -D WLED_DISABLE_2D"),
+            ("ssdr_v2-esp32",   "seven_segment_display_reloaded_v2", "esp32dev",      "auto_save seven_segment_display_reloaded_v2", ""),
+            ("syslog-esp32",   "syslog", "esp32dev",            "auto_save", "-D WLED_ENABLE_SYSLOG -D WLED_DEBUG"),
+            ("syslog-esp32c3", "syslog", "esp32c3dev",          "auto_save", "-D WLED_ENABLE_SYSLOG -D WLED_DEBUG"),
+            ("syslog-esp32s2", "syslog", "lolin_s2_mini",       "auto_save", "-D WLED_ENABLE_SYSLOG -D WLED_DEBUG"),
+            ("syslog-esp32s3", "syslog", "esp32s3dev_16MB_opi", "auto_save", "-D WLED_ENABLE_SYSLOG -D WLED_DEBUG"),
+            ("syslog-esp8266", "syslog", "nodemcuv2",           "",          "-D WLED_ENABLE_SYSLOG"),
+          ]
+          def present(req):
+            if req == "syslog":
+              return os.path.isfile("wled00/syslog.h")
+            return os.path.isfile(f"usermods/{req}/library.json")
+          include = [dict(name=n, base=b, usermods=u, flags=f) for n, r, b, u, f in table if present(r)]
+          print(json.dumps(include, indent=2))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+            out.write("include=" + json.dumps(include) + "\n")
+
+  build:
+    name: ${{ matrix.name }}
+    needs: matrix
+    if: needs.matrix.outputs.include != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.matrix.outputs.include) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - run: npm ci
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.buildcache
+          key: pio-device-${{ runner.os }}-${{ matrix.base }}-${{ hashFiles('platformio.ini', 'requirements.txt') }}
+          restore-keys: pio-device-${{ runner.os }}-${{ matrix.base }}-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - name: Install PlatformIO
+        run: pip install -r requirements.txt
+      - name: Write platformio_override.ini
+        env:
+          BASE: ${{ matrix.base }}
+          USERMODS: ${{ matrix.usermods }}
+          FLAGS: ${{ matrix.flags }}
+        run: |
+          {
+            echo "[env:ci_device]"
+            echo "extends = env:${BASE}"
+            echo "build_flags = \${env:${BASE}.build_flags} ${FLAGS}"
+            if [ -n "${USERMODS}" ]; then echo "custom_usermods = ${USERMODS}"; fi
+          } > platformio_override.ini
+          cat platformio_override.ini
+      - name: Build firmware
+        run: pio run -e ci_device
