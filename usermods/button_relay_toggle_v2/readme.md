@@ -13,9 +13,8 @@ Manages up to **4 independent button/relay groups**. A short press on a hardware
 - Home Assistant MQTT discovery (optional)
 - Relay command subscription (`/Relay/set`) for remote control from HA or any MQTT client
 - Startup suppression: ignores button events for 1 second after boot to avoid false triggers
-- Per-relay boot state: Default (feature disabled, original behavior), On, or Off — and the forced
-  state defends itself against the first conflicting MQTT command received afterwards (e.g. a
-  stale retained `/set` message), correcting the published state to match
+- Per-relay boot state: Default (feature disabled, original behavior), On, or Off
+- Retained `/set` commands are cleared on subscribe, so a stale command can't undo the relay state
 
 ---
 
@@ -101,31 +100,18 @@ saved without a full reboot):
   `relay_active_low` for that group, not to avoid Default.
 - **On (`1`)** — the relay is forced to its logical ON state at boot.
 - **Off (`2`)** — the relay is forced to its logical OFF state at boot (same physical result as
-  Default given the same `relay_active_low`, but explicit and, unlike Default, also defended
-  against MQTT as described below).
+  Default given the same `relay_active_low`, but explicit).
 
 On and Off use the exact same `relay_active_low`-relative logic as everything else in this
 usermod (button toggle, MQTT `/set`) — they don't bypass it. Get `relay_active_low` right for
 your wiring first; On/Off then reliably mean what they say.
 
-Every relay defends itself against the *next* incoming `.../Relay/set` command after any
-(re)subscribe — this happens at boot, on every MQTT reconnect, and on every settings-page save
-(each one re-subscribes to `/set`, and the broker redelivers any retained command on every
-subscribe, not just the first one ever). That first command is checked against the relay's
-**actual current state** — never against the configured `relay_boot_state` directly. If it
-disagrees, it's ignored and the corrected (actual) state is republished to `.../Relay/N` so any
-client (e.g. Home Assistant still retaining a stale ON/OFF) gets fixed too.
-
 `relay_boot_state` only decides what to physically drive at the moment of a genuine
 (re)initialization: cold boot, the usermod being newly enabled, the relay's GPIO being
 reassigned, or the boot-state setting itself being changed. A plain settings save that doesn't
 touch any of that leaves the relay exactly as it is — including if it was toggled on since boot
-by the button or by HA — and only corrects MQTT/HA to match reality, it never forces the relay
-back to the configured boot value on every save.
-
-Only the first command after each (re)subscribe is checked this way — normal MQTT control
-resumes immediately after. The physical button is never affected by this and can always toggle
-the relay.
+by the button or by HA — and only republishes the actual state to MQTT/HA, it never forces the
+relay back to the configured boot value on every save.
 
 The setting is exposed as a dropdown (Disabled/On/Off) on the usermod settings page.
 
@@ -158,9 +144,9 @@ All topics are relative to the WLED device topic (e.g. `wled/<device>/Button_Rel
 
 | Topic | Payload | Description |
 |-------|---------|-------------|
-| `.../group_N/Relay/set` | `ON` / `OFF` | Set relay state |
+| `.../group_N/Relay/set` | `ON` / `OFF` | Set relay state (other payloads are ignored) |
 
-> **Important:** The device never publishes to `/Relay/set`. Publishing retained messages to a command topic causes MQTT loops where the broker re-delivers the retained state as a new command. Only external clients (e.g. Home Assistant) should write to `/set` topics.
+> **Important:** Commands to `/Relay/set` must not be retained. A retained command is redelivered by the broker on every (re)subscribe (boot, MQTT reconnect, settings save) and would be applied again. The HA discovery payload therefore does not set `retain`, and the device clears any retained `/set` message (empty retained publish) right before it subscribes. Apart from that, the device never publishes to `/set`.
 
 ---
 
@@ -176,7 +162,7 @@ Discovery is re-triggered on every MQTT reconnect.
 
 The relay switch in HA uses:
 - **State topic**: `.../group_N/Relay`
-- **Command topic**: `.../group_N/Relay/set`
+- **Command topic**: `.../group_N/Relay/set` (not retained)
 
 ---
 
@@ -186,8 +172,8 @@ The relay switch in HA uses:
 |---------|-------------|
 | Relay never toggles on button press | Button pin is `-1`, wrong GPIO, or usermod not enabled |
 | Double-trigger on button press | Mechanical bounce lasting > 500 ms; try a different button or add a hardware capacitor |
-| Relay turns on/off rapidly in a loop | Old retained `/Relay/set` messages on the broker; clear retained messages or ensure only external clients publish to `/set` |
+| Relay turns on/off rapidly in a loop | Another client publishes retained messages to `/Relay/set`; the device clears them on subscribe, but only external clients should publish to `/set`, and never retained |
 | HA switch shows "unavailable" | MQTT not connected, or HA discovery not enabled |
 | Relay resets to a state you didn't expect on reboot | Expected if `relay_boot_state` is Default for that group - it drives logical OFF, not necessarily "physically off"; check `relay_active_low` matches your wiring - see "Relay boot state" above |
-| Forced boot On/Off gets overridden by MQTT right after boot | Should not happen - the override only protects the *first* command after boot; if HA/automations send a second conflicting command afterward, it will be applied normally |
+| Forced boot On/Off gets overridden by MQTT right after boot | An HA automation or other client sent a live command after boot, or publishes `/set` retained (check its `retain` setting); retained `/set` messages are cleared before subscribing |
 | Button triggers immediately after boot | Expected behavior if button is held at power-on; startup suppression (1 s) prevents most cases |
