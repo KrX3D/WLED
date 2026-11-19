@@ -1380,17 +1380,11 @@ bool UsermodHourEffect::isTopicMatch(const char* topic, const char* suffix) cons
   }
   
   // Check exact match
-  if (strcmp(topic, suffix) == 0) {
-    _logUsermodHourEffect("[TOPIC-MATCH] Exact match: '%s' == '%s'", topic, suffix);
-    return true;
-  }
+  // No logs on a match either: this runs several times for every MQTT message.
+  if (strcmp(topic, suffix) == 0) return true;
   
   // Check if topic ends with suffix
-  bool endsWith = strcmp(topic + topicLen - suffixLen, suffix) == 0;
-  if (endsWith) {
-    _logUsermodHourEffect("[TOPIC-MATCH] Suffix match: '%s' ends with '%s'", topic, suffix);
-  }
-  return endsWith;
+  return strcmp(topic + topicLen - suffixLen, suffix) == 0;
 }
 
 // Value of the first key that is present, else the fallback.
