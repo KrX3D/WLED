@@ -98,6 +98,10 @@
 #define _logUsermodHourEffect(fmt, ...) \
   DEBUG_PRINTF("[HourEffect] " fmt "\n", ##__VA_ARGS__)
 
+// Sensor/logic evaluation details: only logged when an MQTT message changed a sensor state
+#define _logEvalHourEffect(fmt, ...) \
+  do { if (_logSensorEval) { _logUsermodHourEffect(fmt, ##__VA_ARGS__); } } while (0)
+
 #ifdef USERMOD_NIXIECLOCK
   #include "nixieclock_v2.h"
 #endif
@@ -245,6 +249,7 @@ private:
   // on a genuine presence transition (the room was actually left and
   // re-entered).
   bool manualOffOverride = false;
+  bool _logSensorEval = false;     // set by updateSensorState() when a sensor state changed
 
   // reconcilePresenceLed() state (runs from loop()): when it last checked,
   // and since when "presence TRUE but LEDs OFF" has been seen (0 = not seen).

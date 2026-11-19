@@ -87,7 +87,6 @@ void BackupHelper<T>::restore(T &seg) {
 // Logic: ALL topics must be ON for presence=true, ANY OFF means presence=false
 ///////////////////////////////////////////////////////////////////////////////
 void UsermodHourEffect::handleSimpleMultiTopicPresence(const String& topics, const char* topic, const char* payload) {
-  _logUsermodHourEffect("[MULTI-PRESENCE] Processing message: topic=%s, payload=%s", topic, payload);
   
   String topicStr = String(topic);
   String payloadStr = String(payload);
@@ -98,12 +97,9 @@ void UsermodHourEffect::handleSimpleMultiTopicPresence(const String& topics, con
   std::vector<String> topicList = parseTopicList(topics);
   
   for (const auto& configuredTopic : topicList) {
-    _logUsermodHourEffect("[MULTI-PRESENCE] Checking configured topic: '%s'", configuredTopic.c_str());
-    
     // Check if incoming topic matches this configured topic
     if (topicStr.endsWith(configuredTopic) || topicStr.indexOf(configuredTopic) >= 0) {
       foundMatch = true;
-      _logUsermodHourEffect("[MULTI-PRESENCE] Topic match found!");
       
       // Determine ON/OFF state from payload
       bool newState = false;
@@ -114,7 +110,6 @@ void UsermodHourEffect::handleSimpleMultiTopicPresence(const String& topics, con
         DeserializationError error = deserializeJson(doc, payload);
         if (!error && doc.containsKey("presence")) {
           newState = doc["presence"].as<bool>();
-          _logUsermodHourEffect("[MULTI-PRESENCE] JSON presence value: %s", newState ? "true" : "false");
         } else {
           _logUsermodHourEffect("[MULTI-PRESENCE] JSON parse error or missing 'presence' key");
           return; // Don't update if we can't parse
@@ -129,8 +124,6 @@ void UsermodHourEffect::handleSimpleMultiTopicPresence(const String& topics, con
       bool previousState = (it != topicStates.end()) ? it->second : false;
       
       if (previousState == newState) {
-        _logUsermodHourEffect("[MULTI-PRESENCE] Topic '%s' state unchanged (%s), ignoring", 
-                              configuredTopic.c_str(), newState ? "ON" : "OFF");
         return; // No change, don't trigger
       }
       
@@ -145,7 +138,6 @@ void UsermodHourEffect::handleSimpleMultiTopicPresence(const String& topics, con
   }
   
   if (!foundMatch) {
-    _logUsermodHourEffect("[MULTI-PRESENCE] No matching topic found, ignoring message");
     return;
   }
   
@@ -178,7 +170,6 @@ void UsermodHourEffect::handleSimpleMultiTopicPresence(const String& topics, con
                             PresenceBlocker, BlockTriggers);
     }
   } else {
-    _logUsermodHourEffect("[MULTI-PRESENCE] Combined presence unchanged: %s", presenceValue ? "ON" : "OFF");
   }
 }
 
@@ -187,8 +178,6 @@ void UsermodHourEffect::handleSimpleMultiTopicPresence(const String& topics, con
 // Logic: Use FIRST topic that provides valid lux value
 ///////////////////////////////////////////////////////////////////////////////
 void UsermodHourEffect::handleSimpleMultiTopicLux(const String& topics, const char* topic, const char* payload) {
-  _logUsermodHourEffect("[MULTI-LUX] Processing message: topic=%s, payload=%s", topic, payload);
-  _logUsermodHourEffect("[MULTI-LUX] Configured topics: %s", topics.c_str());
   
   String topicStr = String(topic);
   String payloadStr = String(payload);
@@ -197,11 +186,8 @@ void UsermodHourEffect::handleSimpleMultiTopicLux(const String& topics, const ch
   std::vector<String> topicList = parseTopicList(topics);
   
   for (const auto& configuredTopic : topicList) {
-    _logUsermodHourEffect("[MULTI-LUX] Checking configured topic: '%s'", configuredTopic.c_str());
-    
     // Check if incoming topic matches this configured topic
     if (topicStr.endsWith(configuredTopic) || topicStr.indexOf(configuredTopic) >= 0) {
-      _logUsermodHourEffect("[MULTI-LUX] Topic match found!");
       float newLuxValue;
       
       if (payloadStr.startsWith("{")) {
@@ -215,10 +201,8 @@ void UsermodHourEffect::handleSimpleMultiTopicLux(const String& topics, const ch
         
         if (doc.containsKey("illuminance")) {
           newLuxValue = doc["illuminance"].as<float>();
-          _logUsermodHourEffect("[MULTI-LUX] Found 'illuminance' field: %.1f", newLuxValue);
         } else if (doc.containsKey("lux")) {
           newLuxValue = doc["lux"].as<float>();
-          _logUsermodHourEffect("[MULTI-LUX] Found 'lux' field: %.1f", newLuxValue);
         } else {
           _logUsermodHourEffect("[MULTI-LUX] No illuminance/lux field found in JSON");
           return;
@@ -226,12 +210,10 @@ void UsermodHourEffect::handleSimpleMultiTopicLux(const String& topics, const ch
       } else {
         // Simple numeric payload
         newLuxValue = payloadStr.toFloat();
-        _logUsermodHourEffect("[MULTI-LUX] Simple numeric payload: %.1f", newLuxValue);
       }
       
       // Check if lux value actually changed (deadband to ignore normal sensor jitter)
       if (!updateLuxValue(newLuxValue)) {
-        _logUsermodHourEffect("[MULTI-LUX] Lux value within deadband (%.1f), no trigger", luxValue);
         return;
       }
       
@@ -247,8 +229,6 @@ void UsermodHourEffect::handleSimpleMultiTopicLux(const String& topics, const ch
       return; // Process only first matching topic
     }
   }
-  
-  _logUsermodHourEffect("[MULTI-LUX] No matching topic found, ignoring message");
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1180,6 +1160,12 @@ void UsermodHourEffect::setup() {
   _logUsermodHourEffect("[SETUP] Input pin: %d (activeLow=%d, allocated=%d)", 
                         inputPin[0], inputActiveLow, inputPinAllocated);
   _logUsermodHourEffect("[SETUP] MQTT lamps: '%s'", MqttLamps.c_str());
+  _logUsermodHourEffect("[SETUP] Config status: useSimplePresence=%s, sensors=%d",
+                        useSimplePresence ? "true" : "false", presenceConfig.sensors.size());
+  _logUsermodHourEffect("[SETUP] Blocker config: useSimpleBlocker=%s, sensors=%d",
+                        useSimpleBlocker ? "true" : "false", blockerConfig.sensors.size());
+  _logUsermodHourEffect("[SETUP] Lux config: useSimpleLux=%s, sensors=%d",
+                        useSimpleLux ? "true" : "false", luxConfig.sensors.size());
 
   _logUsermodHourEffect("[SETUP] Setup completed: numSegments=%d", numSegments);
 }
@@ -1543,28 +1529,21 @@ std::vector<String> UsermodHourEffect::parseTopicList(const String& topicList) {
 bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
 #ifndef WLED_DISABLE_MQTT
   if (!WLED_MQTT_CONNECTED || !enabledUsermod || !topic || !payload) {
-    if (!enabledUsermod) _logUsermodHourEffect("[MQTT-MSG] Usermod disabled, ignoring MQTT message");
     if (!topic || !payload) _logUsermodHourEffect("[MQTT-MSG] Invalid MQTT topic or payload (null)");
     return false;
   }
 
-  _logUsermodHourEffect("[MQTT-MSG] Message received: topic=%s, payload=%s", topic, payload);
+  // No per-message log here: sensor topics (presence/lux/blocker) arrive often,
+  // so only value changes are logged below. Config status is logged once in setup().
   String payloadString = String(payload);
-  
-  _logUsermodHourEffect("[MQTT-MSG] Config status: useSimplePresence=%s, sensors=%d", 
-                        useSimplePresence ? "true" : "false", presenceConfig.sensors.size());
-  _logUsermodHourEffect("[MQTT-MSG] Blocker config: useSimpleBlocker=%s, sensors=%d", 
-                        useSimpleBlocker ? "true" : "false", blockerConfig.sensors.size());
-  _logUsermodHourEffect("[MQTT-MSG] Lux config: useSimpleLux=%s, sensors=%d", 
-                        useSimpleLux ? "true" : "false", luxConfig.sensors.size());
-  
+
   // Build a timestamp string for logging.
   String timestamp = String(day(localTime)) + "." + String(month(localTime)) + "." +
                      String(year(localTime)) + " " + String(hour(localTime)) + ":" +
                      String(minute(localTime)) + ":" + String(second(localTime));
 
   if (isTopicMatch(topic, "/NewEffect")) {
-    _logUsermodHourEffect("[MQTT-MSG] Processing /NewEffect");
+    _logUsermodHourEffect("[MQTT-MSG] Processing /NewEffect: payload=%s", payload);
     GotEffect = atoi(payload);
     ntpLastSyncTime = NTP_NEVER; // Force a new NTP query.
     publishMessage("NewEffect", payloadString + " (" + timestamp + ")");
@@ -1572,7 +1551,7 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
   }
 
   if (isTopicMatch(topic, "/NightMode")) {
-    _logUsermodHourEffect("[MQTT-MSG] Processing /NightMode");
+    _logUsermodHourEffect("[MQTT-MSG] Processing /NightMode: payload=%s", payload);
     bool isNightMode = (payloadString == "true");
     if (isNightMode != NightMode) {
       NightMode = isNightMode;
@@ -1598,14 +1577,12 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
         _logUsermodHourEffect("[MQTT-MSG] Turned LEDs ON after NightMode ended");
       }
       publishMessage("NightMode", payloadString + " (" + timestamp + ")");
-    } else {
-      _logUsermodHourEffect("[MQTT-MSG] NightMode value unchanged, ignoring");
     }
     return true;
   }
 
   if (isTopicMatch(topic, "/NotHome")) {
-    _logUsermodHourEffect("[MQTT-MSG] Processing /NotHome");
+    _logUsermodHourEffect("[MQTT-MSG] Processing /NotHome: payload=%s", payload);
     bool isNotHome = (payloadString == "true");
     if (isNotHome != NotHome) {
       NotHome = isNotHome;
@@ -1616,14 +1593,12 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
         _logUsermodHourEffect("[MQTT-MSG] Turned LEDs OFF due to NotHome state");
       }
       publishMessage("NotHome", payloadString + " (" + timestamp + ")");
-    } else {
-      _logUsermodHourEffect("[MQTT-MSG] NotHome value unchanged, ignoring");
     }
     return true;
   }
 
   if (isTopicMatch(topic, "/3dPrinterFinshed") && enabled3DBlink && !NotHome && !NightMode) {
-    _logUsermodHourEffect("[MQTT-MSG] Processing /3dPrinterFinshed");
+    _logUsermodHourEffect("[MQTT-MSG] Processing /3dPrinterFinshed: payload=%s", payload);
 
     unsigned long now = millis();
 
@@ -1661,7 +1636,7 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
   }
 
   if (isTopicMatch(topic, "/NotificationEffect") && enabledNotificationEffect && !NotHome && !NightMode) {
-    _logUsermodHourEffect("[MQTT-MSG] Processing /NotificationEffect");
+    _logUsermodHourEffect("[MQTT-MSG] Processing /NotificationEffect: payload=%s", payload);
 
     unsigned long now = millis();
     if (BlockTriggers || ResetEffect || (now - last3DTriggerTime < MIN_3D_TRIGGER_MS)) {
@@ -1746,7 +1721,6 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
     }
 
     if (isPresenceTopic) {
-      _logUsermodHourEffect("[MQTT-MSG] Processing advanced presence sensor");
       bool freshMotion = updateSensorState(presenceConfig, topic, payload);
       bool newPresenceValue = evaluatePresenceState(presenceConfig);
 
@@ -1768,7 +1742,6 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
           handlePresenceLuxTrigger();
         }
       } else {
-        _logUsermodHourEffect("[MQTT-MSG] Presence unchanged (advanced): %d", presenceValue);
       }
       // The same sensor often reports presence and illuminance: let the lux
       // handling below see this message too.
@@ -1780,15 +1753,12 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
   if (useSimplePresence && !MqttPresence.isEmpty()) {
     // Check if this is a multi-topic configuration
     if (MqttPresence.indexOf(',') >= 0 && isTopicInList(MqttPresence, topic)) {
-      _logUsermodHourEffect("[MQTT-MSG] Processing multi-topic simple presence");
       handleSimpleMultiTopicPresence(MqttPresence, topic, payload);
       return true;
     }
     
     // Single topic - original behavior
     if (strcmp(topic, MqttPresence.c_str()) == 0) {
-      _logUsermodHourEffect("[MQTT-MSG] Processing simple presence");
-      
       bool newPresenceValue;
       float newLuxValue = luxValue;
       bool luxFound = false;
@@ -1804,7 +1774,6 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
         if (doc.containsKey("illuminance")) {
           newLuxValue = doc["illuminance"].as<float>();
           luxFound = true;
-          _logUsermodHourEffect("[MQTT-MSG] Found illuminance in presence JSON: %.1f", newLuxValue);
         }
       } else {
         payloadString.toLowerCase();
@@ -1828,7 +1797,6 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
           handlePresenceLuxTrigger();
         }
       } else {
-        _logUsermodHourEffect("[MQTT-MSG] Presence/lux values unchanged, ignoring");
       }
       return true;
     }
@@ -1845,7 +1813,6 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
     }
   
     if (isLuxTopic) {
-      _logUsermodHourEffect("[MQTT-MSG] Processing advanced lux sensor");
       // A lux reading is a number, so on_values/currentState don't apply here.
       for (const auto& sensor : luxConfig.sensors) {
         if (isTopicMatch(topic, sensor.topic.c_str())) {
@@ -1855,8 +1822,6 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
             if (triggerMode >= 2 && !PresenceBlocker && !BlockTriggers) {
               handlePresenceLuxTrigger();
             }
-          } else {
-            _logUsermodHourEffect("[MQTT-MSG] Lux unchanged (advanced): %.1f", luxValue);
           }
           break;
         }
@@ -1869,15 +1834,12 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
   if (useSimpleLux && !MqttLux.isEmpty()) {
     // Check if this is a multi-topic configuration
     if (MqttLux.indexOf(',') >= 0 && isTopicInList(MqttLux, topic)) {
-      _logUsermodHourEffect("[MQTT-MSG] Processing multi-topic simple lux");
       handleSimpleMultiTopicLux(MqttLux, topic, payload);
       return true;
     }
     
     // Single topic - original behavior
     if (strcmp(topic, MqttLux.c_str()) == 0) {
-      _logUsermodHourEffect("[MQTT-MSG] Processing simple lux");
-      
       float newLuxValue;
       
       if (payloadString.startsWith("{")) {
@@ -1920,8 +1882,6 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
         if (triggerMode >= 2 && !PresenceBlocker && !BlockTriggers) {
           handlePresenceLuxTrigger();
         }
-      } else {
-        _logUsermodHourEffect("[MQTT-MSG] Lux value unchanged, ignoring");
       }
       return true;
     }
@@ -1939,17 +1899,14 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
     }
 
     if (isBlockerTopic) {
-      _logUsermodHourEffect("[BLOCKER] Processing blocker message");
       updateSensorState(blockerConfig, topic, payload);
-      _logUsermodHourEffect("[BLOCKER] Evaluating blocker logic_true: '%s'", blockerConfig.logicTrue.c_str());
+      _logEvalHourEffect("[BLOCKER] Evaluating blocker logic_true: '%s'", blockerConfig.logicTrue.c_str());
       bool newBlockerValue = evaluateLogicExpression(blockerConfig.logicTrue, blockerConfig);
 
-      _logUsermodHourEffect("[BLOCKER] Blocker result: %s", newBlockerValue ? "BLOCK" : "ALLOW");
+      _logEvalHourEffect("[BLOCKER] Blocker result: %s", newBlockerValue ? "BLOCK" : "ALLOW");
       if (newBlockerValue != PresenceBlocker) {
         PresenceBlocker = newBlockerValue;
         _logUsermodHourEffect("[BLOCKER] Blocker CHANGED to: %s", PresenceBlocker ? "ACTIVE" : "INACTIVE");
-      } else {
-        _logUsermodHourEffect("[BLOCKER] Blocker unchanged: %d", PresenceBlocker);
       }
       return true;
     }
@@ -1957,7 +1914,6 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
 
   // Simple blocker mode
   if (useSimpleBlocker && !MqttPresenceBlocker.isEmpty() && strcmp(topic, MqttPresenceBlocker.c_str()) == 0) {
-    _logUsermodHourEffect("[MQTT-MSG] Processing simple blocker");
     payloadString.toLowerCase();
     
     bool newBlockerValue = (payloadString == "true" || payloadString == "1" || payloadString == "on");
@@ -1965,8 +1921,6 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
     if (newBlockerValue != PresenceBlocker) {
       PresenceBlocker = newBlockerValue;
       _logUsermodHourEffect("[MQTT-MSG] Blocker CHANGED: %d", PresenceBlocker);
-    } else {
-      _logUsermodHourEffect("[MQTT-MSG] Blocker unchanged, ignoring");
     }
     return true;
   }
@@ -2246,11 +2200,8 @@ bool UsermodHourEffect::parseJsonConfig(const String& json, SensorConfig& config
 bool UsermodHourEffect::evaluateSensorState(const MqttSensor& sensor, const String& payload) {
   String value = payload;
   
-  _logUsermodHourEffect("[SENSOR-EVAL] Evaluating sensor '%s'", sensor.id.c_str());
-  
   // If path is specified, extract from JSON
   if (sensor.path.length() > 0) {
-    _logUsermodHourEffect("[SENSOR-EVAL] Extracting JSON path: '%s'", sensor.path.c_str());
     // Filtering keeps memory use independent of how chatty the sensor's payload is.
     StaticJsonDocument<128> filter;
     filter[sensor.path] = true;
@@ -2263,17 +2214,12 @@ bool UsermodHourEffect::evaluateSensorState(const MqttSensor& sensor, const Stri
       return sensor.currentState;
     }
     value = doc[sensor.path].as<String>();
-    _logUsermodHourEffect("[SENSOR-EVAL] Extracted value: '%s'", value.c_str());
-  } else {
-    _logUsermodHourEffect("[SENSOR-EVAL] Using direct payload value: '%s'", value.c_str());
   }
   
   // Check if value matches any of the "on" values
   value.toLowerCase();
   String onValues = sensor.onValues;
   onValues.toLowerCase();
-  
-  _logUsermodHourEffect("[SENSOR-EVAL] Comparing (lowercase): value='%s' against on_values='%s'", value.c_str(), onValues.c_str());
   
   int startIdx = 0;
   int commaIdx = onValues.indexOf(',');
@@ -2293,12 +2239,10 @@ bool UsermodHourEffect::evaluateSensorState(const MqttSensor& sensor, const Stri
     onValue.trim();
     
     if (onValue.length() > 0 && value == onValue) {
-      _logUsermodHourEffect("[SENSOR-EVAL] MATCH found: '%s' == '%s' => TRUE", value.c_str(), onValue.c_str());
       return true;
     }
   }
   
-  _logUsermodHourEffect("[SENSOR-EVAL] No match found => FALSE");
   return false;
 }
 
@@ -2306,25 +2250,20 @@ bool UsermodHourEffect::evaluateSensorState(const MqttSensor& sensor, const Stri
 // Extract lux value from sensor
 ///////////////////////////////////////////////////////////////////////////////
 float UsermodHourEffect::extractLuxValue(const MqttSensor& sensor, const String& payload) {
-  _logUsermodHourEffect("[EXTRACT-LUX] Extracting lux from sensor '%s', payload: %s", sensor.id.c_str(), payload.c_str());
-  
   String value = payload;
   
   // If path is specified, extract from JSON
   if (sensor.path.length() > 0) {
-    _logUsermodHourEffect("[EXTRACT-LUX] Using JSON path: '%s'", sensor.path.c_str());
     StaticJsonDocument<128> filter;
     filter[sensor.path] = true;
     DynamicJsonDocument doc(256);
     DeserializationError error = deserializeJson(doc, payload, DeserializationOption::Filter(filter));
 
     if (!error && doc[sensor.path].isNull()) {
-      _logUsermodHourEffect("[EXTRACT-LUX] No '%s' in payload, keeping %.1f", sensor.path.c_str(), luxValue);
       return luxValue;
     }
     if (!error) {
       float result = doc[sensor.path].as<float>();
-      _logUsermodHourEffect("[EXTRACT-LUX] Extracted from JSON: %.1f", result);
       return result;
     } else {
       _logUsermodHourEffect("[EXTRACT-LUX] JSON parse error: %s, falling back to direct numeric conversion", error.c_str());
@@ -2334,7 +2273,6 @@ float UsermodHourEffect::extractLuxValue(const MqttSensor& sensor, const String&
   
   // Direct numeric value (or fallback if JSON parsing failed)
   float result = payload.toFloat();
-  _logUsermodHourEffect("[EXTRACT-LUX] Direct numeric value: %.1f", result);
   return result;
 }
 
@@ -2348,29 +2286,24 @@ float UsermodHourEffect::extractLuxValue(const MqttSensor& sensor, const String&
 // across a sensor's own transitions when other sensors keep it pinned).
 bool UsermodHourEffect::updateSensorState(SensorConfig& config, const char* topic, const char* payload) {
   String payloadStr = String(payload);
+  _logSensorEval = false; // evaluation details are only logged after a sensor state change
   bool risingEdge = false;
-
-  _logUsermodHourEffect("[SENSOR-UPDATE] Received MQTT: topic='%s', payload='%s'", topic, payload);
 
   // No early exit: several sensors may read different fields of the same topic.
   for (auto& sensor : config.sensors) {
     if (isTopicMatch(topic, sensor.topic.c_str())) {
-      _logUsermodHourEffect("[SENSOR-UPDATE] Matched sensor '%s'", sensor.id.c_str());
 
       bool newState = evaluateSensorState(sensor, payloadStr);
 
       if (newState != sensor.currentState) {
         bool oldState = sensor.currentState;
         sensor.currentState = newState;
+        _logSensorEval = true;
         _logUsermodHourEffect("[SENSOR-UPDATE] Sensor '%s' state CHANGED: %s -> %s",
           sensor.id.c_str(),
           oldState ? "TRUE" : "FALSE",
           newState ? "TRUE" : "FALSE");
         risingEdge |= newState && !oldState;
-      } else {
-        _logUsermodHourEffect("[SENSOR-UPDATE] Sensor '%s' state unchanged: %s",
-          sensor.id.c_str(),
-          newState ? "TRUE" : "FALSE");
       }
     }
   }
@@ -2408,15 +2341,15 @@ bool UsermodHourEffect::isConfiguredLuxTopic(const char* topic) {
 ///////////////////////////////////////////////////////////////////////////////
 bool UsermodHourEffect::evaluateLogicExpression(const String& expression, const SensorConfig& config) {
   if (expression.isEmpty()) {
-    _logUsermodHourEffect("[LOGIC-EVAL] No logic specified - using ANY (OR all sensors)");
+    _logEvalHourEffect("[LOGIC-EVAL] No logic specified - using ANY (OR all sensors)");
     // No logic specified - default to ANY (OR all sensors)
     for (const auto& sensor : config.sensors) {
       if (sensor.currentState) {
-        _logUsermodHourEffect("[LOGIC-EVAL] Found active sensor, returning true");
+        _logEvalHourEffect("[LOGIC-EVAL] Found active sensor, returning true");
         return true;
       }
     }
-    _logUsermodHourEffect("[LOGIC-EVAL] No active sensors, returning false");
+    _logEvalHourEffect("[LOGIC-EVAL] No active sensors, returning false");
     return false;
   }
   
@@ -2425,7 +2358,7 @@ bool UsermodHourEffect::evaluateLogicExpression(const String& expression, const 
   expr.trim();
   expr.toLowerCase();
   
-  _logUsermodHourEffect("[LOGIC-EVAL] Evaluating: '%s'", expr.c_str());
+  _logEvalHourEffect("[LOGIC-EVAL] Evaluating: '%s'", expr.c_str());
   
   // Handle parentheses recursively
   int parenStart = expr.indexOf('(');
@@ -2439,14 +2372,14 @@ bool UsermodHourEffect::evaluateLogicExpression(const String& expression, const 
     }
     if (parenEnd > parenStart) {
       String inner = expr.substring(parenStart + 1, parenEnd);
-      _logUsermodHourEffect("[LOGIC-EVAL] Processing parentheses: (%s)", inner.c_str());
+      _logEvalHourEffect("[LOGIC-EVAL] Processing parentheses: (%s)", inner.c_str());
       bool innerResult = evaluateLogicExpression(inner, config);
       
       // Replace parenthesized expression with result
       String before = expr.substring(0, parenStart);
       String after = expr.substring(parenEnd + 1);
       expr = before + (innerResult ? "true" : "false") + after;
-      _logUsermodHourEffect("[LOGIC-EVAL] After parentheses replacement: '%s'", expr.c_str());
+      _logEvalHourEffect("[LOGIC-EVAL] After parentheses replacement: '%s'", expr.c_str());
       
       return evaluateLogicExpression(expr, config);
     }
@@ -2459,7 +2392,7 @@ bool UsermodHourEffect::evaluateLogicExpression(const String& expression, const 
     String right = expr.substring(andIdx + 5);
     bool leftResult = evaluateLogicExpression(left, config);
     bool rightResult = evaluateLogicExpression(right, config);
-    _logUsermodHourEffect("[LOGIC-EVAL] AND: '%s'=%s AND '%s'=%s => %s", 
+    _logEvalHourEffect("[LOGIC-EVAL] AND: '%s'=%s AND '%s'=%s => %s", 
       left.c_str(), leftResult?"T":"F", right.c_str(), rightResult?"T":"F", (leftResult&&rightResult)?"T":"F");
     return leftResult && rightResult;
   }
@@ -2471,7 +2404,7 @@ bool UsermodHourEffect::evaluateLogicExpression(const String& expression, const 
     String right = expr.substring(orIdx + 4);
     bool leftResult = evaluateLogicExpression(left, config);
     bool rightResult = evaluateLogicExpression(right, config);
-    _logUsermodHourEffect("[LOGIC-EVAL] OR: '%s'=%s OR '%s'=%s => %s", 
+    _logEvalHourEffect("[LOGIC-EVAL] OR: '%s'=%s OR '%s'=%s => %s", 
       left.c_str(), leftResult?"T":"F", right.c_str(), rightResult?"T":"F", (leftResult||rightResult)?"T":"F");
     return leftResult || rightResult;
   }
@@ -2483,22 +2416,22 @@ bool UsermodHourEffect::evaluateLogicExpression(const String& expression, const 
     // Make sure we don't have AND or OR after the !
     if (remaining.indexOf(" and ") < 0 && remaining.indexOf(" or ") < 0) {
       bool result = evaluateLogicExpression(remaining, config);
-      _logUsermodHourEffect("[LOGIC-EVAL] NOT: !'%s'=%s => %s", remaining.c_str(), result?"T":"F", !result?"T":"F");
+      _logEvalHourEffect("[LOGIC-EVAL] NOT: !'%s'=%s => %s", remaining.c_str(), result?"T":"F", !result?"T":"F");
       return !result;
     } else {
       // If there's AND/OR, we need to handle just the first term
-      _logUsermodHourEffect("[LOGIC-EVAL] ERROR: NOT with complex expression without parentheses: %s, maintaining current state", expr.c_str());
+      _logEvalHourEffect("[LOGIC-EVAL] ERROR: NOT with complex expression without parentheses: %s, maintaining current state", expr.c_str());
       return false;
     }
   }
   
   // Handle boolean literals
   if (expr == "true") {
-    _logUsermodHourEffect("[LOGIC-EVAL] Literal: true");
+    _logEvalHourEffect("[LOGIC-EVAL] Literal: true");
     return true;
   }
   if (expr == "false") {
-    _logUsermodHourEffect("[LOGIC-EVAL] Literal: false");
+    _logEvalHourEffect("[LOGIC-EVAL] Literal: false");
     return false;
   }
   
@@ -2507,12 +2440,12 @@ bool UsermodHourEffect::evaluateLogicExpression(const String& expression, const 
     String sensorId = sensor.id;
     sensorId.toLowerCase();
     if (expr == sensorId) {
-      _logUsermodHourEffect("[LOGIC-EVAL] Sensor '%s' = %s", sensor.id.c_str(), sensor.currentState?"TRUE":"FALSE");
+      _logEvalHourEffect("[LOGIC-EVAL] Sensor '%s' = %s", sensor.id.c_str(), sensor.currentState?"TRUE":"FALSE");
       return sensor.currentState;
     }
   }
   
-  _logUsermodHourEffect("[LOGIC-EVAL] Unknown: '%s' => false", expr.c_str());
+  _logEvalHourEffect("[LOGIC-EVAL] Unknown: '%s' => false", expr.c_str());
   return false;
 }
 
@@ -2521,48 +2454,48 @@ bool UsermodHourEffect::evaluateLogicExpression(const String& expression, const 
 // Returns true if presence detected, false otherwise
 ///////////////////////////////////////////////////////////////////////////////
 bool UsermodHourEffect::evaluatePresenceState(const SensorConfig& config) {
-  _logUsermodHourEffect("[PRESENCE-EVAL] Starting evaluation");
-  _logUsermodHourEffect("[PRESENCE-EVAL] Sensors configured: %d", config.sensors.size());
+  _logEvalHourEffect("[PRESENCE-EVAL] Starting evaluation");
+  _logEvalHourEffect("[PRESENCE-EVAL] Sensors configured: %d", config.sensors.size());
   for (const auto& sensor : config.sensors) {
-    _logUsermodHourEffect("[PRESENCE-EVAL]   Sensor '%s': %s", sensor.id.c_str(), sensor.currentState ? "TRUE" : "FALSE");
+    _logEvalHourEffect("[PRESENCE-EVAL]   Sensor '%s': %s", sensor.id.c_str(), sensor.currentState ? "TRUE" : "FALSE");
   }
   
   // Step 1: Evaluate logic_true
   if (config.logicTrue.length() > 0) {
-    _logUsermodHourEffect("[PRESENCE-EVAL] Evaluating logic_true: '%s'", config.logicTrue.c_str());
+    _logEvalHourEffect("[PRESENCE-EVAL] Evaluating logic_true: '%s'", config.logicTrue.c_str());
     bool trueResult = evaluateLogicExpression(config.logicTrue, config);
-    _logUsermodHourEffect("[PRESENCE-EVAL] logic_true result: %s", trueResult ? "TRUE" : "FALSE");
+    _logEvalHourEffect("[PRESENCE-EVAL] logic_true result: %s", trueResult ? "TRUE" : "FALSE");
     
     // If true logic passes, return true (presence detected)
     if (trueResult) {
-      _logUsermodHourEffect("[PRESENCE-EVAL] => FINAL RESULT: TRUE (logic_true satisfied)");
+      _logEvalHourEffect("[PRESENCE-EVAL] => FINAL RESULT: TRUE (logic_true satisfied)");
       return true;
     }
     
     // Step 2: If true logic fails, check if we have false logic
     if (config.logicFalse.length() > 0) {
-      _logUsermodHourEffect("[PRESENCE-EVAL] logic_true failed, evaluating logic_false: '%s'", config.logicFalse.c_str());
+      _logEvalHourEffect("[PRESENCE-EVAL] logic_true=false, evaluating logic_false: '%s'", config.logicFalse.c_str());
       bool falseResult = evaluateLogicExpression(config.logicFalse, config);
-      _logUsermodHourEffect("[PRESENCE-EVAL] logic_false result: %s", falseResult ? "TRUE" : "FALSE");
+      _logEvalHourEffect("[PRESENCE-EVAL] logic_false result: %s", falseResult ? "TRUE" : "FALSE");
       
       // If false logic is satisfied, return false (no presence)
       if (falseResult) {
-        _logUsermodHourEffect("[PRESENCE-EVAL] => FINAL RESULT: FALSE (logic_false satisfied)");
+        _logEvalHourEffect("[PRESENCE-EVAL] => FINAL RESULT: FALSE (logic_false satisfied)");
         return false;
       }
       
       // If neither true nor false logic is satisfied, maintain current state
-      _logUsermodHourEffect("[PRESENCE-EVAL] => FINAL RESULT: %s (keeping current, neither logic satisfied)", presenceValue ? "TRUE" : "FALSE");
+      _logEvalHourEffect("[PRESENCE-EVAL] => FINAL RESULT: %s (keeping current, neither logic satisfied)", presenceValue ? "TRUE" : "FALSE");
       return presenceValue; // Keep current state
     } else {
       // No false logic defined, so NOT true = false
-      _logUsermodHourEffect("[PRESENCE-EVAL] => FINAL RESULT: FALSE (no logic_false, true failed)");
+      _logEvalHourEffect("[PRESENCE-EVAL] => FINAL RESULT: FALSE (no logic_false, true failed)");
       return false;
     }
   }
   
   // No logic defined - default to ANY sensor (OR)
-  _logUsermodHourEffect("[PRESENCE-EVAL] No logic defined, checking for ANY active sensor");
+  _logEvalHourEffect("[PRESENCE-EVAL] No logic defined, checking for ANY active sensor");
   bool hasActiveSensor = false;
   for (const auto& sensor : config.sensors) {
     if (sensor.currentState) {
@@ -2570,7 +2503,7 @@ bool UsermodHourEffect::evaluatePresenceState(const SensorConfig& config) {
       break;
     }
   }
-  _logUsermodHourEffect("[PRESENCE-EVAL] => FINAL RESULT: %s (no logic, ANY sensor)", hasActiveSensor ? "TRUE" : "FALSE");
+  _logEvalHourEffect("[PRESENCE-EVAL] => FINAL RESULT: %s (no logic, ANY sensor)", hasActiveSensor ? "TRUE" : "FALSE");
   return hasActiveSensor;
 }
 
