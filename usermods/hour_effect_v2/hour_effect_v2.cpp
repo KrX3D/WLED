@@ -170,7 +170,6 @@ void UsermodHourEffect::handleSimpleMultiTopicPresence(const String& topics, con
                             PresenceBlocker, BlockTriggers);
     }
   } else {
-    reconcilePresenceLed();
   }
 }
 
@@ -584,26 +583,35 @@ void UsermodHourEffect::handlePresenceLuxTrigger() {
 // setting bri directly, or a transition that arrived while BlockTriggers /
 // PresenceBlocker was active and got swallowed - no future "presence still
 // true" MQTT message will ever retrigger _SetLedsOn(true), since the
-// aggregate value never changes again. Every sensor-update call site treats
-// "unchanged" as "nothing to do". Call this from those unchanged-branches to
-// catch and correct that mismatch: if presence is true, LEDs are off, and
-// nothing is currently blocking triggers, re-run the trigger so it self-heals.
+// aggregate value never changes again. This runs once from loop() (rate
+// limited to RECONCILE_CHECK_MS) instead of from every sensor "unchanged"
+// branch, so a refactor of the presence paths cannot drop it. If presence is
+// true, LEDs are off, the user did not turn them off on purpose
+// (manualOffOverride) and nothing is blocking triggers for at least
+// RECONCILE_DELAY_MS, re-run the trigger so it self-heals.
 ///////////////////////////////////////////////////////////////////////////////
 void UsermodHourEffect::reconcilePresenceLed() {
-  static bool manualSkipLogged = false; // log the manual-off skip once, not on every sensor message
-  if (!manualOffOverride) manualSkipLogged = false;
-  if (!presenceValue || bri != 0) return; // nothing to reconcile
-  if (PresenceBlocker || BlockTriggers || NotHome) return;
-  if (NightMode && !enablePresenceDuringNightMode) return;
-  if (manualOffOverride) {
-    if (!manualSkipLogged) {
-      _logUsermodHourEffect("[RECONCILE] Presence TRUE but LEDs OFF - skipping, user turned them off manually (manualOffOverride)");
-      manualSkipLogged = true;
-    }
+  unsigned long now = millis();
+  if (now - lastReconcileCheck < RECONCILE_CHECK_MS) return;
+  lastReconcileCheck = now;
+
+  bool mismatch = presenceValue && bri == 0 && !manualOffOverride &&
+                  !PresenceBlocker && !BlockTriggers && !NotHome &&
+                  !(NightMode && !enablePresenceDuringNightMode);
+  if (!mismatch) {
+    reconcileMismatchSince = 0;
     return;
   }
+  if (reconcileMismatchSince == 0) {
+    reconcileMismatchSince = now ? now : 1; // 0 means "not seen"
+    return;
+  }
+  if (now - reconcileMismatchSince < RECONCILE_DELAY_MS) return;
 
-  _logUsermodHourEffect("[RECONCILE] Presence TRUE but LEDs OFF (bri=0) with no reported change - re-triggering ON");
+  // Restart the delay: if the trigger mode keeps the LEDs off (e.g. lux above
+  // threshold), the next attempt is RECONCILE_DELAY_MS away, not every check.
+  reconcileMismatchSince = now ? now : 1;
+  _logUsermodHourEffect("[RECONCILE] Presence TRUE but LEDs OFF (bri=0) for %lu ms - re-triggering ON", RECONCILE_DELAY_MS);
   handlePresenceLuxTrigger();
 }
 
@@ -724,10 +732,6 @@ void UsermodHourEffect::checkInputPin() {
     } else {
       _logUsermodHourEffect("[INPUT-PIN] Blocker ACTIVE, skipping trigger");
     }
-  } else {
-    // No change on this poll - self-heal if presence is still active but the
-    // LEDs ended up off (e.g. manual toggle), same as the MQTT presence paths.
-    reconcilePresenceLed();
   }
 }
 
@@ -1201,6 +1205,9 @@ void UsermodHourEffect::loop() {
 
   // Check input pin for presence detection
   checkInputPin();
+
+  // Self-heal "presence TRUE but LEDs OFF" (the only place this is checked)
+  reconcilePresenceLed();
 
   // Check time sanity periodically. If invalid, force NTP re-sync and skip
   // time-based actions for this loop cycle.
@@ -1735,7 +1742,6 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
           handlePresenceLuxTrigger();
         }
       } else {
-        reconcilePresenceLed();
       }
       // The same sensor often reports presence and illuminance: let the lux
       // handling below see this message too.
@@ -1791,7 +1797,6 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
           handlePresenceLuxTrigger();
         }
       } else {
-        reconcilePresenceLed();
       }
       return true;
     }
