@@ -248,6 +248,13 @@ void UsermodHourEffect::onStateChange(uint8_t mode) {
   }
   
   _logUsermodHourEffect("[STATE-CHANGE] External state change detected (mode=%d): bri=%d, lastBrightness=%d", mode, bri, lastBrightness);
+
+  // A UDP sync packet or an external power-on may bring in (or reveal) a
+  // notification effect this lamp is not running itself. Checked in loop(),
+  // not here, because reverting calls stateUpdated() again.
+  if (notifSigValid && (mode == CALL_MODE_NOTIFICATION || (bri > 0 && lastBrightness == 0))) {
+    leftoverCheckPending = true;
+  }
   
   // Check if brightness changed (LED turned ON or OFF externally)
   if (bri != lastBrightness) {
@@ -1278,6 +1285,49 @@ void UsermodHourEffect::loop() {
     
     _logUsermodHourEffect("[LOOP] Reset complete");
   }
+
+  if (leftoverCheckPending && !ResetEffect && !BlockTriggers) {
+    leftoverCheckPending = false;
+    handleLeftoverNotification();
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Leftover notification safety net
+///////////////////////////////////////////////////////////////////////////////
+void UsermodHourEffect::rememberNotificationSignature(uint8_t mode, uint32_t color) {
+  notifSigMode  = mode;
+  notifSigColor = color;
+  notifSigValid = true;
+  _logUsermodHourEffect("[LEFTOVER] Remembered notification signature mode=%d color=%u", mode, color);
+}
+
+bool UsermodHourEffect::mainSegmentShowsNotification() const {
+  if (!notifSigValid) return false;
+  const Segment& seg = strip.getMainSegment();
+  return seg.mode == notifSigMode && seg.colors[0] == notifSigColor;
+}
+
+void UsermodHourEffect::handleLeftoverNotification() {
+  if (!mainSegmentShowsNotification()) return;
+
+  _logUsermodHourEffect("[LEFTOVER] Main segment still shows a notification effect that is not running here");
+  notifSigValid = false;
+
+  if (hasBackupRun) {
+    _logUsermodHourEffect("[LEFTOVER] Restoring own backup");
+    _RestoreLedState();
+  } else if (bootPreset > 0) {
+    _logUsermodHourEffect("[LEFTOVER] No backup, applying boot preset %d", bootPreset);
+    applyPreset(bootPreset, CALL_MODE_NO_NOTIFY);
+  } else {
+    _logUsermodHourEffect("[LEFTOVER] No backup and no boot preset, switching main segment to Solid");
+    internalStateChange = true;
+    strip.getMainSegment().setMode(FX_MODE_STATIC);
+    stateChanged = true;
+    stateUpdated(CALL_MODE_NO_NOTIFY);
+    internalStateChange = false;
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1397,7 +1447,8 @@ static long jsonIntEither(JsonVariantConst primary, JsonVariantConst alias, long
 }
 
 bool UsermodHourEffect::parseNotificationEffectPayload(const String& payload, uint8_t& r, uint8_t& g, uint8_t& b,
-                                                     uint8_t& w, uint8_t& effectMode, unsigned long& durationMs, String& targetDevice, time_t& msgTimestamp) {
+                                                     uint8_t& w, uint8_t& effectMode, uint8_t& speed, uint8_t& intensity, uint8_t& palette,
+                                                     unsigned long& durationMs, String& targetDevice, time_t& msgTimestamp) {
   String trimmed = payload;
   trimmed.trim();
 
@@ -1435,19 +1486,15 @@ bool UsermodHourEffect::parseNotificationEffectPayload(const String& payload, ui
   w = (uint8_t) constrain(jsonIntEither(doc["w"], doc["white"], w), 0, 255);
 
   effectMode = (uint8_t) constrain(jsonIntEither(doc["effect"], doc["mode"], effectMode), 0, 255);
-  effectSpeed = (uint8_t) constrain((int)(doc["speed"] | effectSpeed), 0, 255);
-  effectIntensity = (uint8_t) constrain((int)(doc["intensity"] | effectIntensity), 0, 255);
-  pal = (uint8_t) constrain((int)(doc["palette"] | pal), 0, 255);
+  speed     = (uint8_t) constrain((int)(doc["speed"] | speed), 0, 255);
+  intensity = (uint8_t) constrain((int)(doc["intensity"] | intensity), 0, 255);
+  palette   = (uint8_t) constrain((int)(doc["palette"] | palette), 0, 255);
 
-  if (!doc.containsKey("target")) {
-    _logUsermodHourEffect("[NOTIFICATION-EFFECT] Missing required 'target' field");
-    return false;
-  }
-  targetDevice = doc["target"].as<String>();
+  // 'target' is optional: missing, null or empty means "ALL".
+  targetDevice = doc["target"].isNull() ? String() : doc["target"].as<String>();
   targetDevice.trim();
-  if (!targetDevice.length()) {
-    _logUsermodHourEffect("[NOTIFICATION-EFFECT] Empty 'target' field");
-    return false;
+  if (!targetDevice.length() || targetDevice.equalsIgnoreCase("null") || targetDevice.equalsIgnoreCase("none")) {
+    targetDevice = "ALL";
   }
 
   long parsedDuration = jsonIntEither(doc["durationMs"], doc["duration"], (long)durationMs);
@@ -1458,7 +1505,7 @@ bool UsermodHourEffect::parseNotificationEffectPayload(const String& payload, ui
   msgTimestamp = (time_t)(doc["timestamp"] | (unsigned long)0);
 
   _logUsermodHourEffect("[NOTIFICATION-EFFECT] Parsed payload: rgbw=(%d,%d,%d,%d) effect=%d speed=%d intensity=%d palette=%d duration=%lu target=%s timestamp=%lu",
-                        r, g, b, w, effectMode, effectSpeed, effectIntensity, pal, durationMs, targetDevice.c_str(), (unsigned long)msgTimestamp);
+                        r, g, b, w, effectMode, speed, intensity, palette, durationMs, targetDevice.c_str(), (unsigned long)msgTimestamp);
   return true;
 }
 
@@ -1607,8 +1654,11 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
 
       _BackupCurrentLedState();
 
-      // Apply green blink effect
-      applyEffectSettings(0, 255, 0, 0, 1);
+      // Apply green blink effect. notify=false: every lamp gets this MQTT
+      // message itself, so the effect must not be pushed to synced lamps via
+      // UDP (the restore is never synced, which left them stuck in the effect).
+      rememberNotificationSignature(1, RGBW32(0, 255, 0, 0));
+      applyEffectSettings(0, 255, 0, 0, 1, false);
 
       // Schedule reset after 10 seconds
       activeResetDelayMs = RESET_DELAY_MS;
@@ -1622,55 +1672,42 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
     return true;
   }
 
-  if (isTopicMatch(topic, "/NotificationEffect") && enabledNotificationEffect && !NotHome && !NightMode) {
+  if (isTopicMatch(topic, "/NotificationEffect")) {
     _logUsermodHourEffect("[MQTT-MSG] Processing /NotificationEffect: payload=%s", payload);
 
-    unsigned long now = millis();
-    if (BlockTriggers || ResetEffect || (now - last3DTriggerTime < MIN_3D_TRIGGER_MS)) {
-      _logUsermodHourEffect("[MQTT-MSG] Ignoring duplicate/late notification trigger (BlockTriggers=%d ResetEffect=%d dt=%lu)",
-                          BlockTriggers, ResetEffect, now - last3DTriggerTime);
-      last3DTriggerTime = now;
-      return true;
-    }
-
-    last3DTriggerTime = now;
-
+    // Parse into locals first. effectSpeed/effectIntensity/pal are shared with
+    // the hourly effect, so they are only swapped in while applying below.
     uint8_t r = 0;
     uint8_t g = 255;
     uint8_t b = 0;
     uint8_t w = 0;
     uint8_t effectMode = 1;
+    uint8_t sx = effectSpeed;
+    uint8_t ix = effectIntensity;
+    uint8_t px = pal;
     unsigned long durationMs = RESET_DELAY_MS;
     String targetDevice = "";
     time_t msgTimestamp = 0;
 
-    // The payload's speed/intensity/palette apply to this notification only; without
-    // this they would stick and change the hourly effect, even when the message
-    // was stale or addressed to another device.
-    struct EffectParamsGuard {
-      UsermodHourEffect& um;
-      uint8_t speed, intensity, palette;
-      ~EffectParamsGuard() { um.effectSpeed = speed; um.effectIntensity = intensity; um.pal = palette; }
-    } effectParamsGuard{*this, effectSpeed, effectIntensity, pal};
-
-    if (!parseNotificationEffectPayload(payloadString, r, g, b, w, effectMode, durationMs, targetDevice, msgTimestamp)) {
+    if (!parseNotificationEffectPayload(payloadString, r, g, b, w, effectMode, sx, ix, px, durationMs, targetDevice, msgTimestamp)) {
       _logUsermodHourEffect("[MQTT-MSG] Notification payload ignored (invalid)");
       return true;
     }
 
-    // Reject stale retained messages so effects are not replayed after reconnect.
-    // A message is stale when its own durationMs has already elapsed since it
-    // was sent. Only checked when the payload carries a timestamp AND the device
-    // has a valid NTP time.
-    // NOTE: msgTimestamp is a real UTC Unix timestamp (e.g. HA's as_timestamp(now())).
-    // localTime is timezone/DST-adjusted (see updateLocalTime() in ntp.cpp) and must
-    // NOT be compared against it directly - use toki.second() (raw NTP UTC seconds).
-    time_t nowUtc = (time_t)toki.second();
-    if (msgTimestamp > 0 && isReasonableTimestamp(nowUtc)) {
-      long age    = (long)(nowUtc - msgTimestamp);
-      long maxAge = (long)(durationMs / 1000UL);
-      if (age > maxAge) {
-        _logUsermodHourEffect("[MQTT-MSG] Notification effect stale (age=%lds > maxAge=%lds), ignoring retained message", age, maxAge);
+    // Reject stale (retained) messages so an old notification is never replayed
+    // after a reconnect or reboot. msgTimestamp is UTC Unix seconds (e.g. HA's
+    // as_timestamp(now())), so compare it with toki.second() (raw NTP UTC), not
+    // with the timezone-adjusted localTime. If the message has a timestamp but
+    // NTP is not valid yet, its age is unknown: drop it rather than replay it.
+    if (msgTimestamp > 0) {
+      time_t nowUtc = (time_t)toki.second();
+      if (!isReasonableTimestamp(nowUtc)) {
+        _logUsermodHourEffect("[MQTT-MSG] Notification has timestamp but NTP time not valid yet, ignoring");
+        return true;
+      }
+      long age = (long)(nowUtc - msgTimestamp);
+      if (age > (long)notificationMaxAgeSec) {
+        _logUsermodHourEffect("[MQTT-MSG] Notification effect stale (age=%lds > maxAge=%ds), ignoring retained message", age, notificationMaxAgeSec);
         return true;
       }
     }
@@ -1681,11 +1718,38 @@ bool UsermodHourEffect::onMqttMessage(char* topic, char* payload) {
       return true;
     }
 
+    // Fresh and meant for this device: remember what it looks like, even when
+    // this lamp does not show it, so a copy synced in via UDP from a lamp with
+    // older firmware can be detected and reverted (see handleLeftoverNotification).
+    rememberNotificationSignature(effectMode, RGBW32(r, g, b, w));
+
+    if (!enabledNotificationEffect || NotHome || NightMode) {
+      _logUsermodHourEffect("[MQTT-MSG] Notification not shown (enabled=%d NotHome=%d NightMode=%d)",
+                            enabledNotificationEffect, NotHome, NightMode);
+      return true;
+    }
+
+    unsigned long now = millis();
+    if (BlockTriggers || ResetEffect || (now - lastNotificationTriggerTime < MIN_3D_TRIGGER_MS)) {
+      _logUsermodHourEffect("[MQTT-MSG] Ignoring duplicate/late notification trigger (BlockTriggers=%d ResetEffect=%d dt=%lu)",
+                          BlockTriggers, ResetEffect, now - lastNotificationTriggerTime);
+      lastNotificationTriggerTime = now;
+      return true;
+    }
+    lastNotificationTriggerTime = now;
+
     BlockTriggers = true;
     _logUsermodHourEffect("[MQTT-MSG] Notification effect activated, ALL triggers blocked");
 
     _BackupCurrentLedState();
-    applyEffectSettings(r, g, b, w, effectMode);
+
+    // notify=false: each lamp handles the MQTT message on its own; pushing the
+    // effect via UDP left synced lamps (especially ones that were off) stuck in
+    // it because the restore is never synced.
+    uint8_t savedSpeed = effectSpeed, savedIntensity = effectIntensity, savedPal = pal;
+    effectSpeed = sx; effectIntensity = ix; pal = px;
+    applyEffectSettings(r, g, b, w, effectMode, false);
+    effectSpeed = savedSpeed; effectIntensity = savedIntensity; pal = savedPal;
 
     activeResetDelayMs = durationMs;
     resetScheduledTime = millis();
@@ -2087,7 +2151,14 @@ void UsermodHourEffect::_RestoreLedState() {
 
   // Restore brightness
   _logUsermodHourEffect("[RESTORE-STATE] Restoring brightness: %d -> %d", bri, LastBriValue);
+  bool turnsOff = (bri > 0 && LastBriValue == 0);
   bri = LastBriValue;
+  if (turnsOff) {
+    // The lamp was off before the effect: _SetLedsOn(true) in
+    // applyEffectSettings() also switched the MQTT lamps on, switch them back.
+    controlMqttLamps(false);
+    _logUsermodHourEffect("[RESTORE-STATE] Lamp was off before the effect, powered off again");
+  }
   lastBrightness = bri;
 
   // Update display.  Use NO_NOTIFY so the restored state is not broadcast via UDP
@@ -2105,6 +2176,7 @@ void UsermodHourEffect::_RestoreLedState() {
   }
 
   hasBackupRun = false;  // Clear backup flag after successful restore
+  leftoverCheckPending = false;
   
   // Reset flag
   internalStateChange = false;
@@ -2506,6 +2578,7 @@ void UsermodHourEffect::addToConfig(JsonObject& root) {
   top[FPSTR(_enabledUsermod)]                 = enabledUsermod;
   top[FPSTR(_enabled3DBlink)]                 = enabled3DBlink;
   top[FPSTR(_enabledNotificationEffect)]      = enabledNotificationEffect;
+  top[FPSTR(_notificationMaxAgeSec)]          = notificationMaxAgeSec;
   top[FPSTR(_enabledHourEffect)]              = enabledHourEffect;
   top[FPSTR(_enableNightModePowerOff)]        = enableNightModePowerOff;
   top[FPSTR(_enabledNightModePowerOn)]        = enabledNightModePowerOn;
@@ -2627,6 +2700,8 @@ bool UsermodHourEffect::readFromConfig(JsonObject& root) {
   configComplete &= getJsonValue(top[FPSTR(_enabledUsermod)], enabledUsermod);
   configComplete &= getJsonValue(top[FPSTR(_enabled3DBlink)], enabled3DBlink);
   configComplete &= getJsonValue(top[FPSTR(_enabledNotificationEffect)], enabledNotificationEffect);
+  configComplete &= getJsonValue(top[FPSTR(_notificationMaxAgeSec)], notificationMaxAgeSec, HOUR_EFFECT_NOTIFICATION_MAX_AGE_S);
+  notificationMaxAgeSec = constrain(notificationMaxAgeSec, 5, 3600);
   configComplete &= getJsonValue(top[FPSTR(_enabledHourEffect)], enabledHourEffect);
   configComplete &= getJsonValue(top[FPSTR(_enableNightModePowerOff)], enableNightModePowerOff);
   configComplete &= getJsonValue(top[FPSTR(_enabledNightModePowerOn)], enabledNightModePowerOn);
@@ -3345,6 +3420,11 @@ void UsermodHourEffect::appendConfigData() {
 			"const row=createRow(notif,'Notification MQTT Effect');"
 			"if(row)g2.appendChild(row);"
 		  "}"
+		  "const notifAge=f('Notification max age (s)');"
+		  "if(notifAge){"
+			"const row=createRow(notifAge,'Notification Max Age (s)');"
+			"if(row)g2.appendChild(row);"
+		  "}"
 		  "if(hour){"
 			"const row=createRow(hour,'Effect Every Hour');"
 			"if(row)g2.appendChild(row);"
@@ -3561,6 +3641,7 @@ const char UsermodHourEffect::_name[]                      PROGMEM = "KrX_MQTT_C
 const char UsermodHourEffect::_enabledUsermod[]            PROGMEM = "Enable Usermod";
 const char UsermodHourEffect::_enabled3DBlink[]            PROGMEM = "3d finished blink";
 const char UsermodHourEffect::_enabledNotificationEffect[] PROGMEM = "Notification MQTT Effect";
+const char UsermodHourEffect::_notificationMaxAgeSec[]     PROGMEM = "Notification max age (s)";
 const char UsermodHourEffect::_enabledHourEffect[]         PROGMEM = "Effect every Hour";
 const char UsermodHourEffect::_enableNightModePowerOff[]   PROGMEM = "Enable Power off when NightMode starts";
 const char UsermodHourEffect::_enabledNightModePowerOn[]   PROGMEM = "Enable Power on when NightMode finished";
