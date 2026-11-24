@@ -68,6 +68,7 @@ For Nixie clock integration also add `-D NIXIECLOCK` (see nixieclock_v2 readme).
 |---------|------|---------|-------------|
 | `3d finished blink` | bool | `false` | Enable green blink when `/3dPrinterFinshed` MQTT message is `true` |
 | `Notification MQTT Effect` | bool | `false` | Enable custom notification effects via `/NotificationEffect` |
+| `Notification max age (s)` | int | `30` | A timestamped notification older than this is ignored (5-3600) |
 | `Effect every Hour` | bool | `false` | Play the configured WLED effect at HH:00:00 every hour |
 
 ### Night Mode Settings
@@ -161,7 +162,8 @@ Published to `<groupTopic>/NotificationEffect` as JSON:
   "intensity": 128,
   "palette": 0,
   "durationMs": 10000,
-  "target": "ALL"
+  "target": "ALL",
+  "timestamp": 1794848619
 }
 ```
 
@@ -174,9 +176,55 @@ Published to `<groupTopic>/NotificationEffect` as JSON:
 | `intensity` | Effect intensity (0-255) |
 | `palette` | Palette index (0-255) |
 | `durationMs` / `duration` | Effect hold time in ms (100–600000, default 10000) |
-| `target` | `"ALL"` or the device's `serverDescription` name |
+| `target` | `"ALL"` or the device's `serverDescription` name. Optional: missing, `null` or empty means `"ALL"` |
+| `timestamp` | Optional UTC Unix seconds when the message was sent (HA: `as_timestamp(now()) \| int`) |
 
-After `durationMs` the previous LED state is restored automatically.
+After `durationMs` the previous LED state is restored automatically. A lamp that was
+off is switched on for the effect and switched off again afterwards. A lamp with
+`Notification MQTT Effect` disabled (or in NightMode / NotHome) does nothing.
+
+Behaviour details:
+
+- The effect is applied per lamp and is **not** sent to synced lamps via WLED UDP.
+  Every lamp receives the MQTT message itself and restores itself.
+- Publishing with `retain: true` is fine when the payload has a `timestamp`: a
+  message older than `Notification max age (s)` is ignored, and a timestamped
+  message received before NTP time is valid is ignored too. Without a
+  `timestamp`, only the 10 s guard after an MQTT reconnect protects against replay.
+- Safety net: if a lamp still shows the last notification effect (mode + color)
+  after a UDP sync packet or an external power-on, and no effect of its own is
+  running, it reverts it (own backup, else the boot preset, else Solid).
+
+### Home Assistant: one table for all notifications
+
+Keep the effect table in one HA script and call it with the name of the notification:
+
+```yaml
+script:
+  wled_notify:
+    fields:
+      kind:
+        example: washer
+      target:
+        example: ALL
+    variables:
+      table:
+        washer:  { r: 0,   g: 0,   b: 255, w: 0, effect: 2, speed: 180, intensity: 200, palette: 3, durationMs: 10000 }
+        door:    { r: 255, g: 0,   b: 0,   w: 0, effect: 1, speed: 220, intensity: 255, palette: 0, durationMs: 15000 }
+        printer: { r: 0,   g: 255, b: 0,   w: 0, effect: 1, speed: 128, intensity: 128, palette: 0, durationMs: 10000 }
+    sequence:
+      - action: mqtt.publish
+        data:
+          topic: wled/all/NotificationEffect
+          retain: true
+          payload: >-
+            {{ dict(table[kind], target=(target | default('ALL')),
+                    timestamp=(as_timestamp(now()) | int)) | to_json }}
+```
+
+Call it with `action: script.wled_notify` and `data: { kind: washer }`. In an HA script,
+`default:` under `fields` only pre-fills the UI; a caller that leaves the field out gets
+an undefined variable, hence `target | default('ALL')` in the template.
 
 ---
 
@@ -326,6 +374,7 @@ When built with `-D USERMOD_SSDR`, calls `ssdr->disableOutputFunction(bool)` in 
 | Advanced JSON not loading | JSON too large (>4 KB), parse error, or `&quot;` escaping issue — check serial log |
 | Logic expression gives wrong result | Check operator spacing (`" AND "`, `" OR "` need spaces); use parentheses for complex expressions |
 | Notification effect fires on wrong device | `target` field must match `serverDescription` exactly (case-insensitive) |
+| Notification ignored with "stale" in the log | `timestamp` older than `Notification max age (s)`, or HA/device clock off |
 | 3D printer effect fires repeatedly | Broker has retained `true` on `/3dPrinterFinshed`; clear retained message |
 | NTP time jumps / wrong hourly effect time | Time sanity check forces NTP re-sync; normal after reconnect |
 | Presence blocker not working | Check `Block Presence On/Off` topic or JSON is configured; verify payload matches `on_values` |
