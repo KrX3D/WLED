@@ -167,6 +167,12 @@ class MqttDeferredQueue {
   #define MIN_3D_TRIGGER_MS 3000UL
 #endif
 
+// default max age (seconds) of a timestamped /NotificationEffect message before
+// it is treated as stale (e.g. a retained message replayed after reconnect)
+#ifndef HOUR_EFFECT_NOTIFICATION_MAX_AGE_S
+  #define HOUR_EFFECT_NOTIFICATION_MAX_AGE_S 30
+#endif
+
 // minimum lux delta (in lux) before a reading is treated as "changed" and
 // re-runs the presence/lux trigger logic. Raised from 0.5 to ignore normal
 // sensor jitter (e.g. 22 -> 17 -> 22 -> 19 -> 22) that would otherwise
@@ -286,6 +292,7 @@ private:
   bool enabledUsermod       = HOUR_EFFECT_ENABLED_USERMOD; // Global on/off for this usermod
   bool enabled3DBlink       = HOUR_EFFECT_ENABLED_3D_BLINK; // Enable 3D printer finished blink effect
   bool enabledNotificationEffect = false; // Enable MQTT notification effect trigger
+  int notificationMaxAgeSec = HOUR_EFFECT_NOTIFICATION_MAX_AGE_S; // Max age of a timestamped notification
   bool enabledHourEffect    = HOUR_EFFECT_ENABLED_HOUR_EFFECT; // Enable hourly effect
   bool enableNightModePowerOff  = HOUR_EFFECT_ENABLE_NIGHT_MODE_POWER_OFF; // If true, power off LEDs when NightMode starts
   bool enabledNightModePowerOn  = HOUR_EFFECT_ENABLED_NIGHT_MODE_POWER_ON; // If true, power on LEDs when NightMode ends
@@ -327,6 +334,19 @@ private:
   ////////////////// Backup/Restore Control //////////////////
   bool BlockTriggers = false;  // Block presence/lux triggers during effects
   unsigned long last3DTriggerTime = 0;
+  unsigned long lastNotificationTriggerTime = 0;
+
+  // Signature (mode + primary color) of the last notification / 3D effect seen
+  // via MQTT. Used by the leftover check: if the main segment still shows this
+  // effect while no effect of our own is running, it is a leftover (e.g. synced
+  // via UDP from a lamp with older firmware) and gets reverted.
+  bool     notifSigValid = false;
+  uint8_t  notifSigMode  = 0;
+  uint32_t notifSigColor = 0;
+  bool     leftoverCheckPending = false;
+  void rememberNotificationSignature(uint8_t mode, uint32_t color);
+  bool mainSegmentShowsNotification() const;
+  void handleLeftoverNotification();
   int LastBriValue   = 300;     // Backup for brightness
 
   // Set when the LEDs are turned off externally (e.g. via the Home Assistant
@@ -363,6 +383,7 @@ private:
   static const char _enabledUsermod[];
   static const char _enabled3DBlink[];
   static const char _enabledNotificationEffect[];
+  static const char _notificationMaxAgeSec[];
   static const char _enabledHourEffect[];
   static const char _enableNightModePowerOff[];
   static const char _enabledNightModePowerOn[];
@@ -413,7 +434,8 @@ private:
   void handleSimpleMultiTopicPresence(const String& topics, const char* topic, const char* payload);
   void handleSimpleMultiTopicLux(const String& topics, const char* topic, const char* payload);
   bool parseNotificationEffectPayload(const String& payload, uint8_t& r, uint8_t& g, uint8_t& b,
-                                      uint8_t& w, uint8_t& effectMode, unsigned long& durationMs, String& targetDevice, time_t& msgTimestamp);
+                                      uint8_t& w, uint8_t& effectMode, uint8_t& speed, uint8_t& intensity, uint8_t& palette,
+                                      unsigned long& durationMs, String& targetDevice, time_t& msgTimestamp);
   bool matchesNotificationTarget(const String& targetDevice) const;
   
   // Helper methods for sensor management
