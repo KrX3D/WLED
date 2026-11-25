@@ -181,6 +181,19 @@ class MqttDeferredQueue {
   #define LUX_CHANGE_DELTA 5.0f
 #endif
 
+// how often loop() checks for "presence TRUE but LEDs OFF" (ms)
+#ifndef RECONCILE_CHECK_MS
+  #define RECONCILE_CHECK_MS 1000UL
+#endif
+
+// how long that mismatch must last before the LEDs are switched back on (ms).
+// Gives onStateChange() time to flag an external OFF as manualOffOverride
+// (the JSON API runs in another task on ESP32) and limits retries when the
+// trigger mode decides to keep the LEDs off (e.g. lux above threshold).
+#ifndef RECONCILE_DELAY_MS
+  #define RECONCILE_DELAY_MS 5000UL
+#endif
+
 // logging macro:
 #define _logUsermodHourEffect(fmt, ...) \
   DEBUG_PRINTF("[HourEffect] " fmt "\n", ##__VA_ARGS__)
@@ -357,6 +370,11 @@ private:
   // re-entered).
   bool manualOffOverride = false;
   bool _logSensorEval = false;     // set by updateSensorState() when a sensor state changed
+
+  // reconcilePresenceLed() state (runs from loop()): when it last checked,
+  // and since when "presence TRUE but LEDs OFF" has been seen (0 = not seen).
+  unsigned long lastReconcileCheck = 0;
+  unsigned long reconcileMismatchSince = 0;
 
   // Nixie clock LED control flag (if NixieClock usermod is defined)
   bool NixieLed = true;
