@@ -228,6 +228,8 @@ private:
   bool hasSignificantChange(float oldValue, float newValue);
   bool hasValueChanged();
   bool checkForI2cErrors();
+  bool readFailed();
+  void waitForFirstConversion();
   void scanI2CDevices();
   void scheduleInitRetry();
   bool isTimeValid() const;
@@ -236,13 +238,13 @@ private:
   String sanitizeMqttClientID(const String &clientID);
   void updateEnergy(float power, unsigned long durationMs);
 #ifndef WLED_DISABLE_MQTT
-  void publishMqtt(float shuntVoltage, float busVoltage, float loadVoltage,
+  bool publishMqtt(float shuntVoltage, float busVoltage, float loadVoltage,
                    float current, float current_mA, float power,
                    float power_mW, bool overflow);
-  void mqttCreateHassSensor(const String &name, const String &topic,
+  bool mqttCreateHassSensor(const String &name, const String &topic,
                             const String &deviceClass, const String &unitOfMeasurement,
                             const String &jsonKey, const String &SensorType);
-  void mqttRemoveHassSensor(const String &name, const String &SensorType);
+  bool mqttRemoveHassSensor(const String &name, const String &SensorType);
 #endif
 
 public:
