@@ -374,9 +374,16 @@ bool deserializeState(JsonObject root, byte callMode, byte presetId)
   #if defined(WLED_DEBUG) && defined(WLED_DEBUG_HOST)
     netDebugEnabled = root[F("debug")] | netDebugEnabled;
   #elif defined(WLED_DEBUG) && defined(WLED_ENABLE_SYSLOG)
-    syslogEnabled = root[F("debug")] | syslogEnabled;
-    configNeedsWrite = true;
-    DEBUG_PRINTF_P(PSTR("Syslog: %s\n"), syslogEnabled ? PSTR("ENABLED") : PSTR("DISABLED") );
+    // Only a real change of "debug" is saved: this runs for every state request,
+    // and writing cfg.json each time wears the flash.
+    if (!root[F("debug")].isNull()) {
+      bool newSyslogEnabled = root[F("debug")] | syslogEnabled;
+      if (newSyslogEnabled != syslogEnabled) {
+        syslogEnabled = newSyslogEnabled;
+        configNeedsWrite = true;
+        DEBUG_PRINTF_P(PSTR("Syslog: %s\n"), syslogEnabled ? PSTR("ENABLED") : PSTR("DISABLED") );
+      }
+    }
   #endif
 
   bool onBefore = bri;
