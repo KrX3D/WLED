@@ -140,6 +140,12 @@ extends = env:nodemcuv2
 custom_usermods = ${env:nodemcuv2.custom_usermods} ina2xx_v2
 ```
 
+This environment is not in `default_envs`, so build it explicitly:
+
+```sh
+pio run -e usermod_ina2xx_nodemcuv2
+```
+
 ## Usage
 
 1. Define your sensor in my_config.h or via build flags:

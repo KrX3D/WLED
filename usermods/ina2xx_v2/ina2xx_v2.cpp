@@ -69,7 +69,9 @@ void UsermodINA2xx::applyMqttRestoreIfReady() {
 		return;
 	}
 
-	if (!mqttRestorePending || mqttStateRestored) {
+	// Not checking mqttStateRestored here: a retained state captured in the same pass in which
+	// the timeout fired is still applied. Its values are from before this boot, so adding them is correct.
+	if (!mqttRestorePending) {
 		return;
 	}
 
@@ -428,12 +430,12 @@ void UsermodINA2xx::updateEnergy(float power, unsigned long durationMs) {
 /**
 ** Function to publish INA2xx sensor data to MQTT
 **/
-void UsermodINA2xx::publishMqtt(float shuntVoltage, float busVoltage, float loadVoltage,
+bool UsermodINA2xx::publishMqtt(float shuntVoltage, float busVoltage, float loadVoltage,
 				float current, float current_mA, float power,
 				float power_mW, bool overflow) {
 	if (!WLED_MQTT_CONNECTED) {
 		_logUsermodInaSensor("MQTT not connected, skipping publish");
-		return;
+		return false;
 	}
 
 	// Create a JSON document to hold sensor data
@@ -480,14 +482,18 @@ void UsermodINA2xx::publishMqtt(float shuntVoltage, float busVoltage, float load
 	// Publish the serialized JSON data to the specified MQTT topic.
 	// Retain only once the energy fields are included: a retained message without them
 	// would replace the stored totals on the broker before we have read them back.
-	mqtt->publish(topic, 0, mqttStateRestored, buffer, payload_size);
+	if (mqtt->publish(topic, 0, mqttStateRestored, buffer, payload_size) == 0) { // 0 = not queued (disconnected or low memory)
+		_logUsermodInaSensor("MQTT publish failed, retrying on the next check");
+		return false;
+	}
 	_logUsermodInaSensor("MQTT publish complete, payload size: %d bytes", payload_size);
+	return true;
 }
 
 /**
 ** Function to create Home Assistant sensor configuration
 **/
-void UsermodINA2xx::mqttCreateHassSensor(const String &name, const String &topic,
+bool UsermodINA2xx::mqttCreateHassSensor(const String &name, const String &topic,
 						const String &deviceClass, const String &unitOfMeasurement,
 						const String &jsonKey, const String &SensorType) {
 	String sanitizedName = name;
@@ -578,7 +584,7 @@ void UsermodINA2xx::mqttCreateHassSensor(const String &name, const String &topic
 
 	char topic_S[128];
 	int length = snprintf_P(topic_S, sizeof(topic_S), "homeassistant/%s/%s/%s/config", SensorType.c_str(), sanitizedMqttClientID.c_str(), sanitizedName.c_str());
-	if (length >= sizeof(topic_S)) {
+	if (length < 0 || static_cast<size_t>(length) >= sizeof(topic_S)) {
 		_logUsermodInaSensor("HA topic truncated - potential buffer overflow");
 	}
 
@@ -587,11 +593,15 @@ void UsermodINA2xx::mqttCreateHassSensor(const String &name, const String &topic
 	_logUsermodInaSensor("Buffer: %s", buffer);
 
 	// Publish the sensor configuration to Home Assistant
-	mqtt->publish(topic_S, 0, true, buffer, payload_size);
+	if (mqtt->publish(topic_S, 0, true, buffer, payload_size) == 0) {
+		_logUsermodInaSensor("Home Assistant sensor %s not sent, retrying on the next check", sanitizedName.c_str());
+		return false;
+	}
 	_logUsermodInaSensor("Home Assistant sensor %s created", sanitizedName.c_str());
+	return true;
 }
 
-void UsermodINA2xx::mqttRemoveHassSensor(const String &name, const String &SensorType) {
+bool UsermodINA2xx::mqttRemoveHassSensor(const String &name, const String &SensorType) {
 	String sanitizedName = name;
 	sanitizedName.replace(' ', '-');
 	_logUsermodInaSensor("Removing HA sensor: %s", sanitizedName.c_str());
@@ -601,13 +611,17 @@ void UsermodINA2xx::mqttRemoveHassSensor(const String &name, const String &Senso
 
 	char sensorTopic[128];
 	int length = snprintf_P(sensorTopic, sizeof(sensorTopic), "homeassistant/%s/%s/%s/config", SensorType.c_str(), sanitizedMqttClientID.c_str(), sanitizedName.c_str());
-	if (length >= sizeof(sensorTopic)) {
+	if (length < 0 || static_cast<size_t>(length) >= sizeof(sensorTopic)) {
 		_logUsermodInaSensor("HA sensor topic truncated - potential buffer overflow");
 	}
 
 	// Publish an empty message with retain to delete the sensor from Home Assistant
-	mqtt->publish(sensorTopic, 0, true, "");
+	if (mqtt->publish(sensorTopic, 0, true, "") == 0) {
+		_logUsermodInaSensor("Removal of %s not sent, retrying on the next check", sensorTopic);
+		return false;
+	}
 	_logUsermodInaSensor("Published empty message to remove sensor: %s", sensorTopic);
+	return true;
 }
 
 /**
@@ -735,7 +749,7 @@ void UsermodINA2xx::setup() {
 	reinitPending = false; // readFromConfig() before setup() already set it; this init covers it
 #if INA_SENSOR_TYPE == 226
 	if (initDone && _ina2xx) {
-		_ina2xx->waitUntilConversionCompleted(); // first data can be zero without this in continuous mode
+		waitForFirstConversion(); // first data can be zero without this in continuous mode
 	}
 #endif
 	if (initDone) {
@@ -775,6 +789,26 @@ void UsermodINA2xx::scheduleInitRetry() {
 }
 
 #if INA_SENSOR_TYPE == 226
+// Like INA226_WE::waitUntilConversionCompleted(), but with a deadline, so a sensor that
+// stops answering cannot block setup() forever. One conversion covers bus and shunt
+// voltage, each taking (conversion time x averages).
+void UsermodINA2xx::waitForFirstConversion() {
+	static const uint16_t convTimeUs[8] = {140, 204, 332, 588, 1100, 2116, 4156, 8244};
+	static const uint16_t averages[8]   = {1, 4, 16, 64, 128, 256, 512, 1024};
+	uint32_t conversionMs = 2UL * convTimeUs[conversionTime & 0x07] * averages[(average >> 9) & 0x07] / 1000UL;
+	uint32_t deadlineMs = 2 * conversionMs + 100; // margin for clock tolerance and I2C time
+	unsigned long start = millis();
+	_ina2xx->readAndClearFlags(); // clears the conversion ready flag
+	while (!_ina2xx->convAlert) {
+		if (millis() - start > deadlineMs) {
+			_logUsermodInaSensor("No conversion within %lu ms, continuing without waiting", (unsigned long)deadlineMs);
+			return;
+		}
+		delay(1);
+		_ina2xx->readAndClearFlags();
+	}
+}
+
 // Returns true if the last transfer failed; the readings of that cycle are then discarded
 bool UsermodINA2xx::checkForI2cErrors(){
   byte errorCode = _ina2xx->getI2cErrorCode();
@@ -806,6 +840,16 @@ bool UsermodINA2xx::checkForI2cErrors(){
   return false;
 }
 #endif
+
+// True if the last register read failed. Only the INA226 driver reports I2C errors; it
+// overwrites the code on every transfer, so this must be checked after each read.
+bool UsermodINA2xx::readFailed() {
+#if INA_SENSOR_TYPE == 226
+	return checkForI2cErrors();
+#else
+	return false;
+#endif
+}
 
 // Loop function called continuously
 void UsermodINA2xx::loop() {
@@ -846,15 +890,21 @@ void UsermodINA2xx::loop() {
 	lastCheck = millis();
 	_logUsermodInaSensor("Reading sensor data at %lu ms", lastCheck);
 
-	// Fetch sensor data
-	shuntVoltage = roundDecimals(_ina2xx->getShuntVoltage_mV());
-	busVoltage = roundDecimals(_ina2xx->getBusVoltage_V());
-
+	// Fetch sensor data; a failed read discards the whole cycle (not published, no energy)
+	float rawShunt_mV = _ina2xx->getShuntVoltage_mV();
+	if (readFailed()) return;
+	float rawBus_V = _ina2xx->getBusVoltage_V();
+	if (readFailed()) return;
 	float rawCurrent_mA = _ina2xx->getCurrent_mA();
+	if (readFailed()) return;
+	float rawPower_mW = _ina2xx->getBusPower();
+	if (readFailed()) return;
+
+	shuntVoltage = roundDecimals(rawShunt_mV);
+	busVoltage = roundDecimals(rawBus_V);
 	current_mA = roundDecimals(rawCurrent_mA);
 	current = roundDecimals(rawCurrent_mA / 1000.0); // Convert from mA to A
 
-	float rawPower_mW = _ina2xx->getBusPower();
 	power_mW = roundDecimals(rawPower_mW);
 	power = roundDecimals(rawPower_mW / 1000.0); // Convert from mW to W
 	float rawPower_W = rawPower_mW / 1000.0f; // unrounded, for the energy integration
@@ -887,7 +937,9 @@ void UsermodINA2xx::loop() {
 	} else {
 		_logUsermodInaSensor("First reading - establishing baseline for energy calculation");
 	}
-	lastPublishTime = lastCheck;
+	// No baseline before the time is synced: the first interval after the sync must not
+	// include time from before it (updateEnergy() skips everything until then)
+	lastPublishTime = isTimeValid() ? lastCheck : 0;
 
 #ifndef WLED_DISABLE_MQTT
 	// Publish sensor data via MQTT if connected and enabled
@@ -898,7 +950,9 @@ void UsermodINA2xx::loop() {
 				(heartbeatInterval > 0 && lastCheck - lastMqttPublish >= static_cast<uint32_t>(heartbeatInterval) * 1000UL);
 			if (mqttPublishAlways || valueChanged || heartbeatDue) {
 				_logUsermodInaSensor("Publishing MQTT data (always=%d, changed=%d, heartbeat=%d)", mqttPublishAlways, valueChanged, heartbeatDue);
-				publishMqtt(shuntVoltage, busVoltage, loadVoltage, current, current_mA, power, power_mW, overflow);
+				if (!publishMqtt(shuntVoltage, busVoltage, loadVoltage, current, current_mA, power, power_mW, overflow)) {
+					return; // nothing marked as sent, so the next check publishes again
+				}
 				lastMqttPublish = lastCheck;
 				mqttDataPublished = true;
 
@@ -918,9 +972,10 @@ void UsermodINA2xx::loop() {
 			snprintf_P(sensorTopic, 127, "%s/sensor/ina2xx", mqttDeviceTopic);
 
 			// Publishing an empty retained message to delete the sensor from Home Assistant
-			mqtt->publish(sensorTopic, 0, true, "");
-			mqttPublishSent = false;
-			mqttDataPublished = false;
+			if (mqtt->publish(sensorTopic, 0, true, "") != 0) {
+				mqttPublishSent = false;
+				mqttDataPublished = false;
+			}
 		}
 	}
 
@@ -931,35 +986,38 @@ void UsermodINA2xx::loop() {
 			char topic[128];
 			snprintf_P(topic, 127, "%s/sensor/ina2xx", mqttDeviceTopic); // Common topic for all INA2xx data
 
-			mqttCreateHassSensor(F("Current"), topic, F("current"), F("A"), F("current_A"), F("sensor"));
-			mqttCreateHassSensor(F("Voltage"), topic, F("voltage"), F("V"), F("bus_voltage_V"), F("sensor"));
-			mqttCreateHassSensor(F("Power"), topic, F("power"), F("W"), F("power_W"), F("sensor"));
-			mqttCreateHassSensor(F("Shunt Voltage"), topic, F("voltage"), F("mV"), F("shunt_voltage_mV"), F("sensor"));
-			mqttCreateHassSensor(F("Shunt Resistor"), topic, F(""), F("Ω"), F("shunt_resistor_Ohms"), F("sensor"));
-			mqttCreateHassSensor(F("Overflow"), topic, F(""), F(""), F("overflow"), F("sensor"));
-			mqttCreateHassSensor(F("Daily Energy"), topic, F("energy"), F("kWh"), F("daily_energy_kWh"), F("sensor"));
-			mqttCreateHassSensor(F("Monthly Energy"), topic, F("energy"), F("kWh"), F("monthly_energy_kWh"), F("sensor"));
-			mqttCreateHassSensor(F("Total Energy"), topic, F("energy"), F("kWh"), F("total_energy_kWh"), F("sensor"));
+			// Not short-circuited: every sensor is sent each attempt; retained configs make repeats harmless
+			bool ok = true;
+			ok &= mqttCreateHassSensor(F("Current"), topic, F("current"), F("A"), F("current_A"), F("sensor"));
+			ok &= mqttCreateHassSensor(F("Voltage"), topic, F("voltage"), F("V"), F("bus_voltage_V"), F("sensor"));
+			ok &= mqttCreateHassSensor(F("Power"), topic, F("power"), F("W"), F("power_W"), F("sensor"));
+			ok &= mqttCreateHassSensor(F("Shunt Voltage"), topic, F("voltage"), F("mV"), F("shunt_voltage_mV"), F("sensor"));
+			ok &= mqttCreateHassSensor(F("Shunt Resistor"), topic, F(""), F("Ω"), F("shunt_resistor_Ohms"), F("sensor"));
+			ok &= mqttCreateHassSensor(F("Overflow"), topic, F(""), F(""), F("overflow"), F("sensor"));
+			ok &= mqttCreateHassSensor(F("Daily Energy"), topic, F("energy"), F("kWh"), F("daily_energy_kWh"), F("sensor"));
+			ok &= mqttCreateHassSensor(F("Monthly Energy"), topic, F("energy"), F("kWh"), F("monthly_energy_kWh"), F("sensor"));
+			ok &= mqttCreateHassSensor(F("Total Energy"), topic, F("energy"), F("kWh"), F("total_energy_kWh"), F("sensor"));
 
-			haDiscoverySent = true; // Mark as sent to avoid repeating
-			_logUsermodInaSensor("Home Assistant discovery complete");
+			haDiscoverySent = ok; // retried on the next check if any message was not sent
+			_logUsermodInaSensor("Home Assistant discovery %s", ok ? "complete" : "incomplete, retrying");
 		}
 	} else if (!haDiscovery && haDiscoverySent) {
 		if (WLED_MQTT_CONNECTED) {
 			_logUsermodInaSensor("Removing Home Assistant discovery sensors");
 			// Remove previously created sensors
-			mqttRemoveHassSensor(F("Current"), F("sensor"));
-			mqttRemoveHassSensor(F("Voltage"), F("sensor"));
-			mqttRemoveHassSensor(F("Power"), F("sensor"));
-			mqttRemoveHassSensor(F("Shunt Voltage"), F("sensor"));
-			mqttRemoveHassSensor(F("Shunt Resistor"), F("sensor"));
-			mqttRemoveHassSensor(F("Overflow"), F("sensor"));
-			mqttRemoveHassSensor(F("Daily Energy"), F("sensor"));
-			mqttRemoveHassSensor(F("Monthly Energy"), F("sensor"));
-			mqttRemoveHassSensor(F("Total Energy"), F("sensor"));
+			bool ok = true;
+			ok &= mqttRemoveHassSensor(F("Current"), F("sensor"));
+			ok &= mqttRemoveHassSensor(F("Voltage"), F("sensor"));
+			ok &= mqttRemoveHassSensor(F("Power"), F("sensor"));
+			ok &= mqttRemoveHassSensor(F("Shunt Voltage"), F("sensor"));
+			ok &= mqttRemoveHassSensor(F("Shunt Resistor"), F("sensor"));
+			ok &= mqttRemoveHassSensor(F("Overflow"), F("sensor"));
+			ok &= mqttRemoveHassSensor(F("Daily Energy"), F("sensor"));
+			ok &= mqttRemoveHassSensor(F("Monthly Energy"), F("sensor"));
+			ok &= mqttRemoveHassSensor(F("Total Energy"), F("sensor"));
 
-			haDiscoverySent = false; // Mark as sent to avoid repeating
-			_logUsermodInaSensor("Home Assistant discovery removal complete");
+			haDiscoverySent = !ok; // retried on the next check if any message was not sent
+			_logUsermodInaSensor("Home Assistant discovery removal %s", ok ? "complete" : "incomplete, retrying");
 		}
 	}
 #endif
@@ -1053,7 +1111,13 @@ void UsermodINA2xx::readFromJsonState(JsonObject& root) {
 	JsonObject usermod = root[FPSTR(_name)];
 	if (!usermod.isNull()) {
 		// Read values from JSON or retain existing values if not present.
-		// "enabled" is not read here: enabling needs the sensor init, which the usermod settings do.
+		// "enabled" can only turn sampling off here; enabling needs the sensor init, which the usermod settings do.
+		if (usermod.containsKey("enabled") && !(usermod["enabled"] | true)) {
+			enabled = false;
+			lastPublishTime = 0; // do not integrate energy across the disabled period
+			_logUsermodInaSensor("Disabled via JSON state; enable it again in the usermod settings");
+			return;
+		}
 		if (usermod.containsKey("totalEnergy_kWh")) {
 			double v = usermod["totalEnergy_kWh"] | totalEnergy_kWh;
 			if (!isPlausibleEnergy(v)) {
